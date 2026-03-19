@@ -48,7 +48,10 @@ Supported networks: **preview**, **preprod**, **mainnet**
 
 Every endpoint accepts an optional \`network\` parameter. Default is \`preview\`.`,
     },
-    servers: [{ url: 'http://localhost:3000', description: 'Local' }],
+    servers: [
+      { url: 'https://midnight-api.nmkr.io', description: 'Production' },
+      { url: 'http://localhost:3000', description: 'Local' },
+    ],
     tags: [
       { name: 'Wallet', description: 'Create, query wallets, register Dust' },
       { name: 'Transfer', description: 'NIGHT token transfers' },
