@@ -1,18 +1,18 @@
 #!/usr/bin/env tsx
 // =============================================================
-// NIGHT Token Transfer auf Midnight Preview
+// NIGHT Token Transfer on Midnight Preview
 //
-// Verwendung:
+// Usage:
 //   npx tsx src/transfer-night.ts \
 //     --sender-seed <HEX_SEED> \
-//     --to <EMPFAENGER_ADRESSE> \
-//     --amount <MENGE> \
-//     [--dust-seed <HEX_SEED>]    # Optional: separater Dust-Provider
+//     --to <RECIPIENT_ADDRESS> \
+//     --amount <AMOUNT> \
+//     [--dust-seed <HEX_SEED>]    # Optional: separate Dust provider
 //
-// Voraussetzungen:
-//   1. Proof-Server laeuft (lokal auf Port 6300)
-//   2. Sender-Wallet hat genuegend NIGHT
-//   3. Dust-Provider hat genuegend DUST (oder Sender selbst)
+// Prerequisites:
+//   1. Proof server running (local on port 6300)
+//   2. Sender wallet has enough NIGHT
+//   3. Dust provider has enough DUST (or sender itself)
 // =============================================================
 
 import { WebSocket } from 'ws';
@@ -34,11 +34,11 @@ import * as Rx from 'rxjs';
 import { UnshieldedAddress, MidnightBech32m } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { ENDPOINTS, NETWORK } from './config.js';
 
-// WebSocket global verfuegbar machen (Node.js hat kein natives WebSocket)
+// Make WebSocket globally available (Node.js has no native WebSocket)
 // @ts-expect-error: Needed for GraphQL subscriptions
 globalThis.WebSocket = WebSocket;
 
-// ---- Seed-Ableitung (HD-Wallet) ----
+// ---- Seed derivation (HD wallet) ----
 
 function deriveKeysFromSeed(seed: string) {
   const hdWallet = HDWallet.fromSeed(Buffer.from(seed, 'hex'));
@@ -59,7 +59,7 @@ function deriveKeysFromSeed(seed: string) {
   return derivationResult.keys;
 }
 
-// ---- Wallet-Konfiguration ----
+// ---- Wallet configuration ----
 
 function buildShieldedConfig() {
   return {
@@ -100,7 +100,7 @@ function buildDustConfig() {
   };
 }
 
-// ---- Wallet erstellen und starten ----
+// ---- Create and start wallet ----
 
 interface WalletContext {
   facade: WalletFacade;
@@ -153,10 +153,10 @@ async function createAndStartWallet(seed: string): Promise<WalletContext> {
   return { facade, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
 }
 
-// ---- Wallet Sync abwarten ----
+// ---- Wait for wallet sync ----
 
 async function waitForSync(facade: WalletFacade, label: string): Promise<void> {
-  console.log(`  Synchronisiere ${label}...`);
+  console.log(`  Syncing ${label}...`);
   await Rx.firstValueFrom(
     facade.state().pipe(
       Rx.throttleTime(5_000),
@@ -177,7 +177,7 @@ async function waitForSync(facade: WalletFacade, label: string): Promise<void> {
   console.log(`  ${label}: ${nightBalance} NIGHT, ${dustInfo}`);
 }
 
-// ---- CLI-Argumente ----
+// ---- CLI arguments ----
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -197,13 +197,13 @@ function parseArgs() {
   if (!parsed.amount) missing.push('--amount');
 
   if (missing.length > 0) {
-    console.error(`Fehler: Fehlende Argumente: ${missing.join(', ')}`);
+    console.error(`Error: Missing arguments: ${missing.join(', ')}`);
     console.error('');
-    console.error('Verwendung:');
+    console.error('Usage:');
     console.error('  npx tsx src/transfer-night.ts \\');
     console.error('    --sender-seed <HEX_SEED> \\');
-    console.error('    --to <EMPFAENGER_ADRESSE> \\');
-    console.error('    --amount <MENGE> \\');
+    console.error('    --to <RECIPIENT_ADDRESS> \\');
+    console.error('    --amount <AMOUNT> \\');
     console.error('    [--dust-seed <HEX_SEED>]');
     process.exit(1);
   }
@@ -216,29 +216,29 @@ function parseArgs() {
   };
 }
 
-// ---- Hauptlogik ----
+// ---- Main logic ----
 
 async function main() {
   const args = parseArgs();
 
-  // NIGHT-Betraege: 1 NIGHT = 1_000_000 raw
+  // NIGHT amounts: 1 NIGHT = 1_000_000 raw
   const amountRaw = BigInt(Math.round(parseFloat(args.amount) * 1_000_000));
 
   console.log('=== Midnight NIGHT Transfer ===');
   console.log('');
 
-  // 1. Netzwerk initialisieren
+  // 1. Initialize network
   setNetworkId(NETWORK);
-  console.log(`Netzwerk:   ${NETWORK}`);
+  console.log(`Network:    ${NETWORK}`);
   console.log(`Indexer:    ${ENDPOINTS.indexerHttp}`);
   console.log(`Proof:      ${ENDPOINTS.proofServer}`);
-  console.log(`Betrag:     ${args.amount} NIGHT (${amountRaw} raw)`);
-  console.log(`Empfaenger: ${args.to}`);
-  console.log(`Dust-Prov:  ${args.dustSeed ? 'separater Seed' : 'Sender = Dust-Provider'}`);
+  console.log(`Amount:     ${args.amount} NIGHT (${amountRaw} raw)`);
+  console.log(`Recipient:  ${args.to}`);
+  console.log(`Dust prov:  ${args.dustSeed ? 'separate seed' : 'sender = dust provider'}`);
   console.log('');
 
-  // 2. Sender-Wallet erstellen und synchronisieren
-  console.log('[1/4] Erstelle Sender-Wallet...');
+  // 2. Create and sync sender wallet
+  console.log('[1/4] Creating sender wallet...');
   const sender = await createAndStartWallet(args.senderSeed);
   await waitForSync(sender.facade, 'Sender');
 
@@ -246,29 +246,29 @@ async function main() {
   const senderNight = senderState.unshielded.balances[unshieldedToken().raw] ?? 0n;
 
   if (senderNight < amountRaw) {
-    console.error(`Fehler: Nicht genuegend NIGHT. Vorhanden: ${senderNight}, Benoetigt: ${amountRaw}`);
+    console.error(`Error: Not enough NIGHT. Available: ${senderNight}, Required: ${amountRaw}`);
     await sender.facade.stop();
     process.exit(1);
   }
 
-  // 3. Dust-Provider (optional separates Wallet)
+  // 3. Dust provider (optional separate wallet)
   let dustSecretKey = sender.dustSecretKey;
   let dustFacade: WalletFacade | null = null;
 
   if (args.dustSeed) {
-    console.log('[2/4] Erstelle separaten Dust-Provider...');
+    console.log('[2/4] Creating separate dust provider...');
     const dustProvider = await createAndStartWallet(args.dustSeed);
-    await waitForSync(dustProvider.facade, 'Dust-Provider');
+    await waitForSync(dustProvider.facade, 'Dust provider');
     dustSecretKey = dustProvider.dustSecretKey;
     dustFacade = dustProvider.facade;
   } else {
-    console.log('[2/4] Sender ist auch Dust-Provider.');
+    console.log('[2/4] Sender is also the dust provider.');
   }
 
-  // 4. Transfer erstellen
-  console.log('[3/4] Erstelle Transfer-Transaktion...');
+  // 4. Create transfer
+  console.log('[3/4] Creating transfer transaction...');
 
-  // Empfaengeradresse von bech32m in UnshieldedAddress-Objekt dekodieren
+  // Decode recipient address from bech32m into UnshieldedAddress object
   const parsedAddr = MidnightBech32m.parse(args.to);
   const receiverAddress = parsedAddr.decode(UnshieldedAddress, getNetworkId());
 
@@ -294,29 +294,29 @@ async function main() {
     { ttl },
   );
 
-  console.log('  Transaktion erstellt, signiere...');
+  console.log('  Transaction created, signing...');
 
   // Sign the unproven transaction
   const signFn = (payload: Uint8Array) => sender.unshieldedKeystore.signData(payload);
   const signedRecipe = await (sender.facade as any).signRecipe(recipe, signFn);
 
-  console.log('  Finalisiere (ZK-Proof via Proof-Server)...');
+  console.log('  Finalizing (ZK proof via proof server)...');
 
   // Prove + bind via the facade (uses proof server)
   const finalizedTx = await sender.facade.finalizeTransaction(signedRecipe.transaction);
 
-  // 5. Absenden
-  console.log('[4/4] Sende Transaktion...');
+  // 5. Submit
+  console.log('[4/4] Submitting transaction...');
   const txHash = await sender.facade.submitTransaction(finalizedTx);
 
   console.log('');
-  console.log('=== Transfer erfolgreich! ===');
-  console.log(`  TX-Hash:     ${txHash}`);
-  console.log(`  Betrag:      ${args.amount} NIGHT`);
-  console.log(`  Empfaenger:  ${args.to}`);
-  console.log(`  Netzwerk:    ${NETWORK}`);
+  console.log('=== Transfer successful! ===');
+  console.log(`  TX hash:     ${txHash}`);
+  console.log(`  Amount:      ${args.amount} NIGHT`);
+  console.log(`  Recipient:   ${args.to}`);
+  console.log(`  Network:     ${NETWORK}`);
 
-  // Aufraemen
+  // Clean up
   await sender.facade.stop();
   if (dustFacade) {
     await dustFacade.stop();
@@ -327,13 +327,13 @@ async function main() {
 
 main().catch(async (err) => {
   console.error('');
-  console.error('Fehler:', err.message || err);
+  console.error('Error:', err.message || err);
   if (err.stack) {
     console.error(err.stack);
   }
   if (String(err).includes('ECONNREFUSED')) {
     console.error('');
-    console.error('Tipp: Proof-Server erreichbar? Pruefen:');
+    console.error('Tip: Is the proof server reachable? Check:');
     console.error(`  curl ${ENDPOINTS.proofServer}/health`);
   }
   process.exit(1);

@@ -1,8 +1,8 @@
 #!/usr/bin/env tsx
 // =============================================================
-// Alle Adressen aus einem Seed ableiten
+// Derive all addresses from a seed
 //
-// Verwendung:
+// Usage:
 //   npx tsx src/seed-info.ts <SEED_HEX>
 //   npx tsx src/seed-info.ts --seed <SEED_HEX>
 // =============================================================
@@ -21,16 +21,16 @@ if (!seed && args.includes('--seed')) {
 }
 
 if (!seed || !/^[0-9a-fA-F]{64}$/.test(seed)) {
-  console.error('Verwendung: npx tsx src/seed-info.ts <SEED_HEX>');
-  console.error('            npx tsx src/seed-info.ts --seed <SEED_HEX>');
+  console.error('Usage: npx tsx src/seed-info.ts <SEED_HEX>');
+  console.error('       npx tsx src/seed-info.ts --seed <SEED_HEX>');
   console.error('');
-  console.error('Der Seed muss 64 Hex-Zeichen (32 Bytes) lang sein.');
+  console.error('The seed must be 64 hex characters (32 bytes) long.');
   process.exit(1);
 }
 
 const hdw = HDWallet.fromSeed(Buffer.from(seed, 'hex'));
 if (hdw.type !== 'seedOk') {
-  console.error('Ungueltiger Seed.');
+  console.error('Invalid seed.');
   process.exit(1);
 }
 
@@ -41,7 +41,7 @@ const dr = hdw.hdWallet
 hdw.hdWallet.clear();
 
 if (dr.type !== 'keysDerived') {
-  console.error('Key-Ableitung fehlgeschlagen.');
+  console.error('Key derivation failed.');
   process.exit(1);
 }
 
@@ -58,9 +58,9 @@ const shieldedAddr = MidnightBech32m.encode('preview', new ShieldedAddress(shiel
 console.log('');
 console.log('=== Midnight Wallet Info ===');
 console.log('');
-console.log('Seed:              ', seed);
+console.log('Seed:               ', seed);
 console.log('');
-console.log('CoinPublicKey:     ', coinPubKey);
-console.log('Shielded Adresse:  ', shieldedAddr.asString());
-console.log('Unshielded Adresse:', unshieldedKeystore.getBech32Address().asString());
+console.log('CoinPublicKey:      ', coinPubKey);
+console.log('Shielded address:   ', shieldedAddr.asString());
+console.log('Unshielded address: ', unshieldedKeystore.getBech32Address().asString());
 console.log('');

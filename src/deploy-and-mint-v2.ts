@@ -1,20 +1,20 @@
 #!/usr/bin/env tsx
 // =============================================================
-// NFT Contract Deploy + Mint auf Midnight Preview
+// NFT Contract Deploy + Mint on Midnight Preview
 //
-// Verwendung:
+// Usage:
 //   npx tsx src/deploy-and-mint-v2.ts --seed <HEX_SEED>
 //
-// Optionen:
-//   --name "Mein NFT"       NFT-Name (default: "Midnight NFT #0")
-//   --uri "ipfs://..."      Metadata-URI (default: placeholder)
-//   --collection "MidNFT"   Collection-Name (default: "MidnightNFT")
-//   --symbol "MNFT"         Collection-Symbol (default: "MNFT")
+// Options:
+//   --name "My NFT"         NFT name (default: "Midnight NFT #0")
+//   --uri "ipfs://..."      Metadata URI (default: placeholder)
+//   --collection "MidNFT"   Collection name (default: "MidnightNFT")
+//   --symbol "MNFT"         Collection symbol (default: "MNFT")
 //
-// Voraussetzungen:
-//   1. Contract kompiliert: compact --skip-zk contracts/my-nft.compact contracts/managed/my-nft
-//   2. Proof-Server laeuft auf localhost:6300
-//   3. Wallet hat NIGHT + DUST
+// Prerequisites:
+//   1. Contract compiled: compact --skip-zk contracts/my-nft.compact contracts/managed/my-nft
+//   2. Proof server running on localhost:6300
+//   3. Wallet has NIGHT + DUST
 // =============================================================
 
 import { WebSocket } from 'ws';
@@ -149,9 +149,9 @@ function parseArgs() {
     if (key && value) parsed[key] = value;
   }
   if (!parsed.seed) {
-    console.error('Fehler: --seed <HEX_SEED> ist erforderlich');
+    console.error('Error: --seed <HEX_SEED> is required');
     console.error('');
-    console.error('Verwendung:');
+    console.error('Usage:');
     console.error('  npx tsx src/deploy-and-mint-v2.ts --seed <HEX_SEED> [--name "NFT Name"] [--uri "ipfs://..."]');
     process.exit(1);
   }
@@ -161,7 +161,7 @@ function parseArgs() {
     uri: parsed.uri || 'ipfs://example/metadata.json',
     collection: parsed.collection || 'MidnightNFT',
     symbol: parsed.symbol || 'MNFT',
-    to: parsed.to || null, // CoinPublicKey des Empfaengers (hex), oder null = an sich selbst
+    to: parsed.to || null, // CoinPublicKey of the recipient (hex), or null = send to self
   };
 }
 
@@ -174,40 +174,40 @@ async function main() {
   console.log('=== Midnight NFT - Deploy & Mint ===');
   console.log('');
 
-  // 1. Netzwerk
+  // 1. Network
   setNetworkId(NETWORK);
-  console.log(`Netzwerk:   ${NETWORK}`);
+  console.log(`Network:    ${NETWORK}`);
   console.log(`Proof:      ${ENDPOINTS.proofServer}`);
   console.log(`Collection: ${args.collection} (${args.symbol})`);
   console.log(`NFT Name:   ${args.name}`);
   console.log(`NFT URI:    ${args.uri}`);
   console.log('');
 
-  // 2. Contract-Artifacts laden
-  console.log('[1/5] Lade kompilierten Contract...');
+  // 2. Load contract artifacts
+  console.log('[1/5] Loading compiled contract...');
   let contractModule: any;
   try {
     contractModule = await import(path.join(contractPath, 'contract', 'index.js'));
   } catch (e) {
-    console.error('Contract nicht gefunden! Zuerst kompilieren:');
+    console.error('Contract not found! Compile first:');
     console.error('  compact --skip-zk contracts/my-nft.compact contracts/managed/my-nft');
     process.exit(1);
   }
 
-  // CompiledContract mit ZK-Artifacts vorbereiten
+  // Prepare CompiledContract with ZK artifacts
   const ContractClass = contractModule.Contract || contractModule.default?.Contract;
   const compiledContract = CompiledContract.make('my-nft', ContractClass).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(contractPath, 'keys')),
   );
-  console.log('  Contract geladen.');
+  console.log('  Contract loaded.');
 
-  // 3. Wallet erstellen
-  console.log('[2/5] Erstelle Wallet...');
+  // 3. Create wallet
+  console.log('[2/5] Creating wallet...');
   const ctx = await createAndStartWallet(args.seed);
 
   // Wait for sync
-  console.log('  Synchronisiere...');
+  console.log('  Syncing...');
   await Rx.firstValueFrom(
     ctx.facade.state().pipe(
       Rx.throttleTime(5_000),
@@ -222,10 +222,10 @@ async function main() {
   const coinPublicKey = state.shielded.coinPublicKey.toHexString();
   console.log(`  CoinPubKey: ${coinPublicKey.substring(0, 16)}...`);
 
-  // 4. Providers erstellen
-  console.log('[3/5] Konfiguriere Providers...');
+  // 4. Create providers
+  console.log('[3/5] Configuring providers...');
   const walletAndMidnightProvider = await createProviderBridge(ctx);
-  // NodeZkConfigProvider erwartet das Base-Directory (enthaelt keys/ und zkir/ Unterordner)
+  // NodeZkConfigProvider expects the base directory (contains keys/ and zkir/ subdirectories)
   const zkConfigProvider = new NodeZkConfigProvider(contractPath);
   const providers = {
     privateStateProvider: levelPrivateStateProvider({
@@ -241,18 +241,18 @@ async function main() {
     midnightProvider: walletAndMidnightProvider,
   };
 
-  // 5. Contract deployen
-  console.log('[4/5] Deploye NFT Contract...');
+  // 5. Deploy contract
+  console.log('[4/5] Deploying NFT contract...');
 
-  // Owner des Contracts (der Deployer darf minten)
+  // Owner of the contract (the deployer is allowed to mint)
   const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
-  // Empfaenger des NFTs (--to oder an sich selbst)
+  // Recipient of the NFT (--to or send to self)
   const mintTo = args.to
     ? { bytes: Buffer.from(args.to, 'hex') }
     : ownerPubKey;
 
   if (args.to) {
-    console.log(`  Mint an:  ${args.to.substring(0, 16)}...`);
+    console.log(`  Mint to:  ${args.to.substring(0, 16)}...`);
   }
 
   const deployed = await deployContract(providers, {
@@ -264,21 +264,21 @@ async function main() {
 
   const contractAddress = deployed.deployTxData.public.contractAddress;
   console.log(`  Contract deployed!`);
-  console.log(`  Adresse: ${contractAddress}`);
+  console.log(`  Address: ${contractAddress}`);
 
-  // 6. NFT minten
-  console.log('[5/5] Minte NFT...');
+  // 6. Mint NFT
+  console.log('[5/5] Minting NFT...');
 
   const mintResult = await deployed.callTx.mint(mintTo, args.uri);
 
   console.log('');
-  console.log('=== NFT erfolgreich gemintet! ===');
+  console.log('=== NFT successfully minted! ===');
   console.log(`  Contract:    ${contractAddress}`);
-  console.log(`  Token-ID:    ${mintResult.public?.result ?? 0}`);
-  console.log(`  Besitzer:    ${coinPublicKey.substring(0, 16)}...`);
+  console.log(`  Token ID:    ${mintResult.public?.result ?? 0}`);
+  console.log(`  Owner:       ${coinPublicKey.substring(0, 16)}...`);
   console.log(`  URI:         ${args.uri}`);
   console.log(`  Collection:  ${args.collection} (${args.symbol})`);
-  console.log(`  Netzwerk:    ${NETWORK}`);
+  console.log(`  Network:     ${NETWORK}`);
 
   await ctx.facade.stop();
   process.exit(0);
@@ -286,11 +286,11 @@ async function main() {
 
 main().catch(async (err) => {
   console.error('');
-  console.error('Fehler:', err.message || err);
+  console.error('Error:', err.message || err);
   if (err.stack) console.error(err.stack);
   if (String(err).includes('ECONNREFUSED')) {
     console.error('');
-    console.error('Tipp: Proof-Server erreichbar?');
+    console.error('Tip: Is the proof server reachable?');
     console.error(`  curl ${ENDPOINTS.proofServer}/health`);
   }
   process.exit(1);

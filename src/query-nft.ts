@@ -1,9 +1,9 @@
 #!/usr/bin/env tsx
 // =============================================================
-// NFT Contract abfragen (read-only, kein Wallet noetig)
+// Query NFT contract (read-only, no wallet needed)
 //
-// Verwendung:
-//   npx tsx src/query-nft.ts --contract <CONTRACT_ADRESSE>
+// Usage:
+//   npx tsx src/query-nft.ts --contract <CONTRACT_ADDRESS>
 // =============================================================
 
 import { WebSocket } from 'ws';
@@ -27,7 +27,7 @@ function parseArgs() {
     if (key && value) parsed[key] = value;
   }
   if (!parsed.contract) {
-    console.error('Verwendung: npx tsx src/query-nft.ts --contract <CONTRACT_ADRESSE>');
+    console.error('Usage: npx tsx src/query-nft.ts --contract <CONTRACT_ADDRESS>');
     process.exit(1);
   }
   return { contract: parsed.contract };
@@ -38,28 +38,28 @@ async function main() {
 
   setNetworkId(NETWORK);
 
-  // Contract-Modul laden (fuer die ledger() Funktion)
+  // Load contract module (for the ledger() function)
   const contractPath = path.resolve(__dirname, '../contracts/managed/my-nft');
   const contractModule = await import(path.join(contractPath, 'contract', 'index.js'));
   const ledgerParser = contractModule.ledger;
 
-  // Indexer abfragen
+  // Query the indexer
   const provider = indexerPublicDataProvider(ENDPOINTS.indexerHttp, ENDPOINTS.indexerWs);
 
   console.log(`=== NFT Contract Query ===`);
   console.log(`Contract: ${args.contract}`);
-  console.log(`Netzwerk: ${NETWORK}`);
+  console.log(`Network:  ${NETWORK}`);
   console.log('');
 
-  // Contract State vom Indexer holen
+  // Fetch contract state from indexer
   const contractState = await provider.queryContractState(args.contract);
 
   if (!contractState) {
-    console.error('Contract nicht gefunden oder noch nicht synchronisiert.');
+    console.error('Contract not found or not yet synchronized.');
     process.exit(1);
   }
 
-  // Ledger State parsen
+  // Parse ledger state
   const state = ledgerParser(contractState.data);
 
   console.log('--- Collection Info ---');
@@ -69,10 +69,10 @@ async function main() {
   console.log(`  Total Supply: ${state.nextTokenId}`);
   console.log('');
 
-  // Alle NFTs auflisten
+  // List all NFTs
   const supply = Number(state.nextTokenId);
   if (supply === 0) {
-    console.log('Keine NFTs gemintet.');
+    console.log('No NFTs minted.');
   } else {
     console.log(`--- ${supply} NFT(s) ---`);
     for (const [tokenId, owner] of state.owners) {
@@ -95,6 +95,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('Fehler:', err.message || err);
+  console.error('Error:', err.message || err);
   process.exit(1);
 });

@@ -1,5 +1,5 @@
 // =============================================================
-// Wallet-Setup für Midnight Preview-Netzwerk
+// Wallet Setup for Midnight Preview Network
 // =============================================================
 
 import { WebSocket } from 'ws';
@@ -10,27 +10,27 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { ENDPOINTS, NETWORK } from './config.js';
 
-// WebSocket global verfügbar machen (Node.js hat kein natives WebSocket)
+// Make WebSocket globally available (Node.js has no native WebSocket)
 (globalThis as any).WebSocket = WebSocket;
 
 /**
- * Initialisiert das Netzwerk und gibt die Provider zurück,
- * die für Contract-Deployment und -Interaktion benötigt werden.
+ * Initializes the network and returns the providers
+ * required for contract deployment and interaction.
  */
 export function initializeNetwork() {
-  console.log(`🌐 Netzwerk: ${NETWORK}`);
+  console.log(`🌐 Network: ${NETWORK}`);
   console.log(`📡 Indexer:  ${ENDPOINTS.indexerHttp}`);
   console.log(`🔐 Proof:    ${ENDPOINTS.proofServer}`);
   console.log('');
 
-  // Netzwerk-ID setzen (beeinflusst Adressformat, Ledger, ZSwap)
+  // Set network ID (affects address format, ledger, ZSwap)
   setNetworkId(NETWORK);
 }
 
 /**
- * Erstellt alle Provider die für Contract-Operationen benötigt werden.
- * @param zkConfigPath - Pfad zu den kompilierten ZK-Artifacts
- * @param stateStoreName - Name des LevelDB-Stores für Private State
+ * Creates all providers required for contract operations.
+ * @param zkConfigPath - Path to the compiled ZK artifacts
+ * @param stateStoreName - Name of the LevelDB store for private state
  */
 export function createProviders(zkConfigPath: string, stateStoreName: string) {
   return {

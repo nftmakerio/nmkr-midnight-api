@@ -1,17 +1,17 @@
 #!/usr/bin/env tsx
 // =============================================================
-// Weiteres NFT minten auf einem bereits deployyten Contract
+// Mint additional NFTs on an already deployed contract
 //
-// Verwendung:
+// Usage:
 //   npx tsx src/mint.ts \
 //     --seed <WALLET_SEED_HEX> \
-//     --contract <CONTRACT_ADRESSE> \
-//     --to <EMPFÄNGER_PUBLIC_KEY> \
+//     --contract <CONTRACT_ADDRESS> \
+//     --to <RECIPIENT_PUBLIC_KEY> \
 //     --uri "ipfs://QmXyz.../metadata.json"
 //
-// Voraussetzungen:
-//   1. Proof-Server läuft: npm run proof-server
-//   2. Du bist der Contract-Owner
+// Prerequisites:
+//   1. Proof server running: npm run proof-server
+//   2. You are the contract owner
 // =============================================================
 
 import { findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
@@ -19,7 +19,7 @@ import { initializeNetwork, createProviders } from './wallet-setup.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-// ---- CLI-Argumente parsen ----
+// ---- Parse CLI arguments ----
 
 function parseArgs() {
   const args = process.argv.slice(2);
@@ -39,13 +39,13 @@ function parseArgs() {
   if (!parsed.to) missing.push('--to');
 
   if (missing.length > 0) {
-    console.error(`❌ Fehler: Fehlende Argumente: ${missing.join(', ')}`);
+    console.error(`❌ Error: Missing arguments: ${missing.join(', ')}`);
     console.error('');
-    console.error('Verwendung:');
+    console.error('Usage:');
     console.error('  npx tsx src/mint.ts \\');
-    console.error('    --seed <dein-wallet-seed-hex> \\');
-    console.error('    --contract <contract-adresse> \\');
-    console.error('    --to <empfänger-public-key> \\');
+    console.error('    --seed <your-wallet-seed-hex> \\');
+    console.error('    --contract <contract-address> \\');
+    console.error('    --to <recipient-public-key> \\');
     console.error('    --uri "ipfs://..."');
     process.exit(1);
   }
@@ -58,7 +58,7 @@ function parseArgs() {
   };
 }
 
-// ---- Hauptlogik ----
+// ---- Main logic ----
 
 async function main() {
   const args = parseArgs();
@@ -67,10 +67,10 @@ async function main() {
   console.log('=== Midnight NFT - Mint ===');
   console.log('');
 
-  // 1. Netzwerk initialisieren
+  // 1. Initialize network
   initializeNetwork();
 
-  // 2. Contract-Artifacts laden
+  // 2. Load contract artifacts
   const contractPath = path.resolve(__dirname, '../contracts/managed/my-nft');
 
   let compiledContract: any;
@@ -79,50 +79,50 @@ async function main() {
       path.join(contractPath, 'contract', 'index.js')
     );
   } catch (e) {
-    console.error('❌ Contract-Artifacts nicht gefunden!');
-    console.error('   Zuerst kompilieren: npm run compile');
+    console.error('❌ Contract artifacts not found!');
+    console.error('   Compile first: npm run compile');
     process.exit(1);
   }
 
-  // 3. Provider erstellen
+  // 3. Create providers
   const providers = createProviders(
     path.join(contractPath, 'keys'),
     'nft-private-state'
   );
 
-  // 4. Existierenden Contract finden
+  // 4. Find existing contract
   console.log(`📋 Contract: ${args.contract}`);
-  console.log(`📤 Empfänger: ${args.to}`);
+  console.log(`📤 Recipient: ${args.to}`);
   console.log(`🔗 URI: ${args.uri}`);
   console.log('');
 
-  console.log('🔍 Verbinde mit deployed Contract...');
+  console.log('🔍 Connecting to deployed contract...');
   const contract = await findDeployedContract(providers, {
     compiledContract: compiledContract.default || compiledContract,
     contractAddress: args.contract,
     privateStateId: 'nftState',
   });
 
-  // 5. Aktuellen Supply prüfen
-  console.log('📊 Prüfe aktuellen Supply...');
+  // 5. Check current supply
+  console.log('📊 Checking current supply...');
   try {
     const supply = await contract.callTx.totalSupply();
-    console.log(`   Aktuelle Anzahl NFTs: ${supply.public?.result || 'unbekannt'}`);
+    console.log(`   Current NFT count: ${supply.public?.result || 'unknown'}`);
   } catch (e) {
-    // totalSupply ist optional
+    // totalSupply is optional
   }
 
-  // 6. Mint ausführen
+  // 6. Execute mint
   console.log('');
-  console.log('🎨 Minte neues NFT...');
+  console.log('🎨 Minting new NFT...');
   const mintResult = await contract.callTx.mint(args.to, args.uri);
 
   const tokenId = mintResult.public?.result;
 
   console.log('');
-  console.log('✅ NFT erfolgreich gemintet!');
-  console.log(`   Token-ID: ${tokenId || 'siehe Transaktion'}`);
-  console.log(`   Besitzer: ${args.to}`);
+  console.log('✅ NFT successfully minted!');
+  console.log(`   Token ID: ${tokenId || 'see transaction'}`);
+  console.log(`   Owner:    ${args.to}`);
   console.log(`   URI:      ${args.uri}`);
 
   process.exit(0);
@@ -130,15 +130,15 @@ async function main() {
 
 main().catch((err) => {
   console.error('');
-  console.error('❌ Fehler:', err.message || err);
+  console.error('❌ Error:', err.message || err);
   if (String(err).includes('ECONNREFUSED')) {
     console.error('');
-    console.error('💡 Tipp: Der öffentliche Proof-Server ist evtl. nicht erreichbar.');
-    console.error('   Prüfe: https://lace-proof-pub.preview.midnight.network');
+    console.error('💡 Tip: The public proof server may not be reachable.');
+    console.error('   Check: https://lace-proof-pub.preview.midnight.network');
   }
   if (String(err).includes('Nur der Contract-Owner')) {
     console.error('');
-    console.error('💡 Nur der Contract-Owner darf neue NFTs minten.');
+    console.error('💡 Only the contract owner is allowed to mint new NFTs.');
   }
   process.exit(1);
 });

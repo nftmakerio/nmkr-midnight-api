@@ -1,5 +1,5 @@
 // =============================================================
-// Netzwerk-Konfigurationen fuer Midnight
+// Network configurations for Midnight
 // =============================================================
 
 export type NetworkName = 'preview' | 'preprod' | 'mainnet';
