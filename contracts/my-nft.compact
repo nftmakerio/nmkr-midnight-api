@@ -1,0 +1,106 @@
+pragma language_version >= 0.21.0;
+
+import CompactStandardLibrary;
+
+export { ZswapCoinPublicKey, ContractAddress };
+
+// ---- Ledger State ----
+
+export sealed ledger collectionName: Opaque<"string">;
+export sealed ledger collectionSymbol: Opaque<"string">;
+export ledger contractOwner: ZswapCoinPublicKey;
+export ledger nextTokenId: Counter;
+export ledger owners: Map<Uint<128>, ZswapCoinPublicKey>;
+export ledger tokenURIs: Map<Uint<128>, Opaque<"string">>;
+export ledger balanceMap: Map<ZswapCoinPublicKey, Counter>;
+
+// ---- Constructor ----
+
+constructor(
+  _name: Opaque<"string">,
+  _symbol: Opaque<"string">,
+  _owner: ZswapCoinPublicKey
+) {
+  collectionName = disclose(_name);
+  collectionSymbol = disclose(_symbol);
+  contractOwner = disclose(_owner);
+}
+
+// ---- Read-Only Circuits ----
+
+export circuit name(): Opaque<"string"> {
+  return collectionName;
+}
+
+export circuit symbol(): Opaque<"string"> {
+  return collectionSymbol;
+}
+
+export circuit ownerOf(tokenId: Uint<128>): ZswapCoinPublicKey {
+  const d_tokenId = disclose(tokenId);
+  assert(owners.member(d_tokenId), "Token existiert nicht");
+  return owners.lookup(d_tokenId);
+}
+
+export circuit tokenURI(tokenId: Uint<128>): Opaque<"string"> {
+  const d_tokenId = disclose(tokenId);
+  assert(tokenURIs.member(d_tokenId), "Token existiert nicht");
+  return tokenURIs.lookup(d_tokenId);
+}
+
+export circuit totalSupply(): Uint<64> {
+  return nextTokenId.read();
+}
+
+// ---- Mint (nur Contract-Owner) ----
+
+export circuit mint(
+  to: ZswapCoinPublicKey,
+  uri: Opaque<"string">
+): Uint<64> {
+  assert(ownPublicKey() == contractOwner, "Nur der Contract-Owner darf minten");
+
+  const d_to = disclose(to);
+  const d_uri = disclose(uri);
+  const tokenId = nextTokenId.read();
+  const tokenIdKey = tokenId as Uint<128>;
+
+  owners.insert(tokenIdKey, d_to);
+  tokenURIs.insert(tokenIdKey, d_uri);
+
+  if (balanceMap.member(d_to)) {
+    balanceMap.lookup(d_to).increment(1);
+  } else {
+    balanceMap.insertDefault(d_to);
+    balanceMap.lookup(d_to).increment(1);
+  }
+
+  nextTokenId.increment(1);
+  return tokenId;
+}
+
+// ---- Transfer ----
+
+export circuit transfer(
+  to: ZswapCoinPublicKey,
+  tokenId: Uint<128>
+): [] {
+  const d_to = disclose(to);
+  const d_tokenId = disclose(tokenId);
+
+  assert(owners.member(d_tokenId), "Token existiert nicht");
+
+  const currentOwner = owners.lookup(d_tokenId);
+  assert(ownPublicKey() == currentOwner, "Nur der Besitzer darf transferieren");
+
+  owners.insert(d_tokenId, d_to);
+
+  balanceMap.lookup(currentOwner).decrement(1);
+
+  if (balanceMap.member(d_to)) {
+    balanceMap.lookup(d_to).increment(1);
+  } else {
+    balanceMap.insertDefault(d_to);
+    balanceMap.lookup(d_to).increment(1);
+  }
+}

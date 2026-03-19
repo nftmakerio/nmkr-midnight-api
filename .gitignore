@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Compiled contract artifacts (regenerate with: compact --skip-zk + zkir in Docker)
+contracts/managed/
+
+# Private state databases (LevelDB)
+nft-state-*/
+nft-private-state/
+nft-collection-*/
+nft-mint-*/
+
+# Wallet files (NEVER commit seeds or keys!)
+*.wallet.json
+.midnight/
+
+# Environment
+.env
+.env.*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+
+# Local databases (LevelDB)
+midnight-level-db/
+nft-state-*/
+nft-private-state/
+nft-collection-*/
+nft-mint-*/
+
+# Old scripts (not part of the API)
+setup.sh
