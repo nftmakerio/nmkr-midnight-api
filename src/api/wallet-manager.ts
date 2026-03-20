@@ -227,18 +227,7 @@ class WalletManager {
     });
     this.subscriptions.set(k, sub);
 
-    // Wait for initial sync (with timeout)
-    try {
-      await Rx.firstValueFrom(
-        ctx.facade.state().pipe(
-          Rx.filter((s: any) => s.isSynced),
-          Rx.timeout({ first: 120_000, with: () => Rx.throwError(() => new Error('Initial sync timeout')) }),
-        ),
-      );
-    } catch {
-      console.warn(`[WalletManager] Initial sync timeout for ${info.seed.substring(0, 12)}... — will continue in background`);
-    }
-
+    // Don't wait for sync — it happens in background via the subscription
     return managed;
   }
 
