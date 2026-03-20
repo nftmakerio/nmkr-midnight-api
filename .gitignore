@@ -16,6 +16,7 @@ nft-mint-*/
 # Wallet files (NEVER commit seeds or keys!)
 *.wallet.json
 .midnight/
+watched-wallets.json
 
 # Environment
 .env

@@ -33,6 +33,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as bip39 from 'bip39';
 import { type NetworkConfig, type NetworkName, getNetwork } from './networks.js';
+import { walletManager, type WalletContext } from './wallet-manager.js';
 
 // @ts-expect-error: Needed for GraphQL subscriptions
 globalThis.WebSocket = WebSocket;
@@ -59,44 +60,24 @@ function deriveKeysFromSeed(seed: string) {
   return result.keys;
 }
 
-// ---- Wallet Context ----
+// ---- Wallet helpers ----
+// Uses WalletManager cache if available, otherwise creates temporary wallet
 
-interface WalletContext {
-  facade: WalletFacade;
-  shieldedSecretKeys: ledger.ZswapSecretKeys;
-  dustSecretKey: ledger.DustSecretKey;
-  unshieldedKeystore: UnshieldedKeystore;
+async function getWalletCtx(seed: string, cfg: NetworkConfig): Promise<{ ctx: WalletContext; cached: boolean }> {
+  return walletManager.getOrCreateContext(seed, cfg);
 }
 
-async function createWallet(seed: string, cfg: NetworkConfig): Promise<WalletContext> {
-  const keys = deriveKeysFromSeed(seed);
-  const networkId = getNetworkId();
-  const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
-  const dustSecretKey = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
-  const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], networkId);
-
-  const walletConfig = {
-    networkId,
-    indexerClientConnection: { indexerHttpUrl: cfg.indexerHttp, indexerWsUrl: cfg.indexerWs },
-    provingServerUrl: new URL(cfg.proofServer),
-    relayURL: new URL(cfg.nodeRpc.replace(/^http/, 'ws')),
-  };
-
-  const facade = await (WalletFacade as any).init({
-    configuration: walletConfig,
-    shielded: (config: any) => ShieldedWallet({ ...config }).startWithSecretKeys(shieldedSecretKeys),
-    unshielded: (config: any) => UnshieldedWallet({ ...config, txHistoryStorage: new InMemoryTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
-    dust: (config: any) => DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 } }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
-  }) as WalletFacade;
-
-  await facade.start(shieldedSecretKeys, dustSecretKey);
-  return { facade, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
-}
-
-async function waitForSync(facade: WalletFacade): Promise<any> {
-  return Rx.firstValueFrom(
-    facade.state().pipe(Rx.throttleTime(5_000), Rx.filter((s: any) => s.isSynced)),
-  );
+async function withWallet<T>(seed: string, cfg: NetworkConfig, fn: (ctx: WalletContext, state: any) => Promise<T>): Promise<T> {
+  const { ctx, cached } = await getWalletCtx(seed, cfg);
+  try {
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
+    return await fn(ctx, state);
+  } finally {
+    // Only stop if it was a temporary wallet (not cached)
+    if (!cached) {
+      if (!cached) await ctx.facade.stop();
+    }
+  }
 }
 
 // ================================================================
@@ -168,9 +149,7 @@ export async function getBalanceByAddress(address: string, network?: string) {
 
 export async function getBalanceBySeed(seed: string, network?: string) {
   const cfg = useNetwork(network);
-  const ctx = await createWallet(seed, cfg);
-  try {
-    const state: any = await waitForSync(ctx.facade);
+  return withWallet(seed, cfg, async (_ctx, state) => {
     const nightBalance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
     const dustCoins = state.dust.availableCoins?.length ?? 0;
     const info = getWalletInfo(seed, network);
@@ -182,9 +161,7 @@ export async function getBalanceBySeed(seed: string, network?: string) {
         dustCoins,
       },
     };
-  } finally {
-    await ctx.facade.stop();
-  }
+  });
 }
 
 export async function transferNight(params: {
@@ -197,18 +174,17 @@ export async function transferNight(params: {
   const cfg = useNetwork(params.network);
   const amountRaw = BigInt(Math.round(params.amount * 1_000_000));
 
-  const sender = await createWallet(params.senderSeed, cfg);
+  const { ctx: sender, cached: senderCached } = await getWalletCtx(params.senderSeed, cfg);
   let dustSecretKey = sender.dustSecretKey;
-  let dustFacade: WalletFacade | null = null;
+  let dustCtx: WalletContext | null = null;
+  let dustCached = false;
 
   try {
-    await waitForSync(sender.facade);
-
     if (params.dustSeed && params.dustSeed !== params.senderSeed) {
-      const dustProvider = await createWallet(params.dustSeed, cfg);
-      await waitForSync(dustProvider.facade);
-      dustSecretKey = dustProvider.dustSecretKey;
-      dustFacade = dustProvider.facade;
+      const dust = await getWalletCtx(params.dustSeed, cfg);
+      dustSecretKey = dust.ctx.dustSecretKey;
+      dustCtx = dust.ctx;
+      dustCached = dust.cached;
     }
 
     const parsedAddr = MidnightBech32m.parse(params.toAddress);
@@ -233,16 +209,16 @@ export async function transferNight(params: {
 
     return { txHash, amount: params.amount, amountRaw: amountRaw.toString(), to: params.toAddress, network: cfg.networkId };
   } finally {
-    await sender.facade.stop();
-    if (dustFacade) await dustFacade.stop();
+    if (!senderCached) await sender.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
   }
 }
 
 export async function registerDust(seed: string, network?: string) {
   const cfg = useNetwork(network);
-  const ctx = await createWallet(seed, cfg);
+  const { ctx, cached } = await getWalletCtx(seed, cfg);
   try {
-    const state: any = await waitForSync(ctx.facade);
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const nightBalance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
     const dustCoins = state.dust.availableCoins?.length ?? 0;
 
@@ -291,7 +267,7 @@ export async function registerDust(seed: string, network?: string) {
       network: cfg.networkId,
     };
   } finally {
-    await ctx.facade.stop();
+    if (!cached) await ctx.facade.stop();
   }
 }
 
@@ -323,9 +299,8 @@ export async function deployAndMintNft(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const ctx = await createWallet(params.seed, cfg);
+  const { ctx, cached } = await getWalletCtx(params.seed, cfg);
   try {
-    await waitForSync(ctx.facade);
 
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
@@ -370,7 +345,7 @@ export async function deployAndMintNft(params: {
       network: cfg.networkId,
     };
   } finally {
-    await ctx.facade.stop();
+    if (!cached) await ctx.facade.stop();
   }
 }
 
@@ -409,11 +384,8 @@ export async function queryNftContract(contractAddress: string, network?: string
 
 export async function getUtxos(seed: string, network?: string) {
   const cfg = useNetwork(network);
-  const ctx = await createWallet(seed, cfg);
-  try {
-    const state: any = await waitForSync(ctx.facade);
+  return withWallet(seed, cfg, async (_ctx, state) => {
     const info = getWalletInfo(seed, network);
-
     const utxos = state.unshielded.availableCoins.map((coin: any, i: number) => ({
       index: i,
       value: coin.utxo.value?.toString(),
@@ -425,9 +397,7 @@ export async function getUtxos(seed: string, network?: string) {
       registeredForDustGeneration: coin.meta?.registeredForDustGeneration ?? false,
       transactionLookup: `/api/transaction/${coin.utxo.intentHash}?network=${cfg.networkId}`,
     }));
-
     const totalRaw = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
-
     return {
       address: info.unshieldedAddress,
       network: cfg.networkId,
@@ -436,9 +406,7 @@ export async function getUtxos(seed: string, network?: string) {
       utxoCount: utxos.length,
       utxos,
     };
-  } finally {
-    await ctx.facade.stop();
-  }
+  });
 }
 
 export async function getTransaction(txHash: string, network?: string) {
@@ -483,9 +451,9 @@ export async function getTransaction(txHash: string, network?: string) {
 
 export async function getTransactionHistory(seed: string, network?: string) {
   const cfg = useNetwork(network);
-  const ctx = await createWallet(seed, cfg);
+  const { ctx, cached } = await getWalletCtx(seed, cfg);
   try {
-    const state: any = await waitForSync(ctx.facade);
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const info = getWalletInfo(seed, network);
     const myAddress = info.unshieldedAddress;
 
@@ -558,7 +526,7 @@ export async function getTransactionHistory(seed: string, network?: string) {
       transactions,
     };
   } finally {
-    await ctx.facade.stop();
+    if (!cached) await ctx.facade.stop();
   }
 }
 
@@ -584,10 +552,8 @@ export async function createCollection(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const ctx = await createWallet(seed, cfg);
+  const { ctx, cached } = await getWalletCtx(seed, cfg);
   try {
-    await waitForSync(ctx.facade);
-
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
     const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
@@ -625,7 +591,7 @@ export async function createCollection(params: {
       network: cfg.networkId,
     };
   } finally {
-    await ctx.facade.stop();
+    if (!cached) await ctx.facade.stop();
   }
 }
 
@@ -664,10 +630,8 @@ export async function mintNft(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const ctx = await createWallet(params.ownerSeed, cfg);
+  const { ctx, cached } = await getWalletCtx(params.ownerSeed, cfg);
   try {
-    await waitForSync(ctx.facade);
-
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
     const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
@@ -711,7 +675,7 @@ export async function mintNft(params: {
       newCollection: false,
     };
   } finally {
-    await ctx.facade.stop();
+    if (!cached) await ctx.facade.stop();
   }
 }
 

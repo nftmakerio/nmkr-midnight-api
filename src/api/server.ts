@@ -27,6 +27,7 @@ import {
   mintNft,
 } from './midnight-service.js';
 import { NETWORKS } from './networks.js';
+import { walletManager } from './wallet-manager.js';
 
 const app = express();
 app.use(cors());
@@ -56,6 +57,7 @@ Every endpoint accepts an optional \`network\` parameter. Default is \`preview\`
       { name: 'Wallet', description: 'Create, query wallets, register Dust' },
       { name: 'Transfer', description: 'NIGHT token transfers' },
       { name: 'NFT', description: 'NFT deploy, mint and query' },
+      { name: 'Watch', description: 'Persistent wallet monitoring — watched wallets stay synced and respond instantly' },
     ],
   },
   apis: [],
@@ -242,6 +244,36 @@ swaggerSpec.paths = {
       },
     },
   },
+  '/api/watch/add': {
+    post: {
+      tags: ['Watch'], summary: 'Add wallet to watch list',
+      description: 'Starts persistent monitoring for a wallet. The wallet stays synced via WebSocket — all subsequent queries (balance, UTXOs, transactions) return instantly. Seeds are stored on disk and reconnected on server restart.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
+        seed: { type: 'string', description: 'Wallet seed to watch' },
+        network: networkEnum,
+        label: { type: 'string', description: 'Optional label for identification', example: 'Treasury Wallet' },
+      } } } } },
+      responses: { 200: { description: 'Wallet added and syncing' }, 500: { description: 'Error' } },
+    },
+  },
+  '/api/watch/remove': {
+    post: {
+      tags: ['Watch'], summary: 'Remove wallet from watch list',
+      description: 'Stops monitoring a wallet and closes the WebSocket connection.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
+        seed: { type: 'string' },
+        network: networkEnum,
+      } } } } },
+      responses: { 200: { description: 'Wallet removed' }, 404: { description: 'Wallet not found in watch list' } },
+    },
+  },
+  '/api/watch/list': {
+    get: {
+      tags: ['Watch'], summary: 'List all watched wallets',
+      description: 'Returns all watched wallets with current balances, sync status and addresses. Data is live — no additional sync needed.',
+      responses: { 200: { description: 'Watched wallet list' } },
+    },
+  },
   '/api/nft/create-collection': {
     post: {
       tags: ['NFT'], summary: 'Create new NFT collection',
@@ -408,6 +440,38 @@ app.post('/api/nft/mint', async (req, res) => {
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
+// ---- Watch Routes ----
+
+app.post('/api/watch/add', async (req, res) => {
+  try {
+    const { seed, network, label } = req.body;
+    if (!seed) return res.status(400).json({ error: 'seed is required' });
+    const n = network || 'preview';
+    const managed = await walletManager.add(seed, n, label);
+    res.json({
+      status: 'watching',
+      synced: managed.synced,
+      label: managed.info.label,
+      network: n,
+      ...managed.addresses,
+    });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/watch/remove', async (req, res) => {
+  try {
+    const { seed, network } = req.body;
+    if (!seed) return res.status(400).json({ error: 'seed is required' });
+    const removed = await walletManager.remove(seed, network || 'preview');
+    if (!removed) return res.status(404).json({ error: 'Wallet not found in watch list' });
+    res.json({ status: 'removed' });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/watch/list', (_req, res) => {
+  res.json({ wallets: walletManager.list() });
+});
+
 app.get('/api/nft/query/:contractAddress', async (req, res) => {
   try {
     const network = req.query.network as string | undefined;
@@ -426,13 +490,24 @@ app.get('/api/health', (_req, res) => {
 // ---- Start ----
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log('');
-  console.log('=== Midnight API Server ===');
-  console.log('');
-  console.log(`  Swagger:  http://localhost:${PORT}/api-docs`);
-  console.log(`  Health:   http://localhost:${PORT}/api/health`);
-  console.log('');
-  console.log(`  Networks: preview, preprod, mainnet`);
-  console.log('');
+
+// Initialize wallet manager (reconnect watched wallets), then start server
+walletManager.initialize().then(() => {
+  app.listen(PORT, () => {
+    console.log('');
+    console.log('=== Midnight API Server ===');
+    console.log('');
+    console.log(`  Swagger:  http://localhost:${PORT}/api-docs`);
+    console.log(`  Health:   http://localhost:${PORT}/api/health`);
+    console.log('');
+    console.log(`  Networks: preview, preprod, mainnet`);
+    console.log(`  Watched:  ${walletManager.list().length} wallet(s)`);
+    console.log('');
+  });
+}).catch((err) => {
+  console.error('Failed to initialize wallet manager:', err.message);
+  // Start server anyway — watch feature just won't have persisted wallets
+  app.listen(PORT, () => {
+    console.log(`  Swagger: http://localhost:${PORT}/api-docs`);
+  });
 });
