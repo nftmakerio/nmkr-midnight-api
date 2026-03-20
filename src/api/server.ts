@@ -73,7 +73,14 @@ swaggerSpec.paths = {
       tags: ['Wallet'], summary: 'Create new wallet',
       description: 'Generates a new seed and derives all addresses.',
       requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { network: networkEnum } } } } },
-      responses: { 200: { description: 'Wallet created' } },
+      responses: { 200: { description: 'Wallet created', content: { 'application/json': { schema: { type: 'object', properties: {
+        seed: { type: 'string', description: 'Hex seed (SECRET!)' },
+        mnemonic: { type: 'string', description: '24-word recovery phrase (SECRET!)' },
+        coinPublicKey: { type: 'string' },
+        shieldedAddress: { type: 'string' },
+        unshieldedAddress: { type: 'string' },
+        network: { type: 'string' },
+      } } } } } },
     },
   },
   '/api/wallet/info': {

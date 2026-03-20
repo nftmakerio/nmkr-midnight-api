@@ -31,6 +31,7 @@ import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import * as Rx from 'rxjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as bip39 from 'bip39';
 import { type NetworkConfig, type NetworkName, getNetwork } from './networks.js';
 
 // @ts-expect-error: Needed for GraphQL subscriptions
@@ -104,8 +105,11 @@ async function waitForSync(facade: WalletFacade): Promise<any> {
 
 export function createNewWallet(network?: string) {
   const cfg = useNetwork(network);
-  const seed = Buffer.from(generateRandomSeed()).toString('hex');
-  return getWalletInfo(seed, network);
+  // Generate 24-word mnemonic (256 bits of entropy)
+  const mnemonic = bip39.generateMnemonic(256);
+  // Derive 32-byte seed from mnemonic
+  const seed = bip39.mnemonicToSeedSync(mnemonic).subarray(0, 32).toString('hex');
+  return { ...getWalletInfo(seed, network), mnemonic };
 }
 
 export function getWalletInfo(seed: string, network?: string) {
