@@ -395,7 +395,6 @@ export async function getUtxos(seed: string, network?: string) {
       outputNo: coin.utxo.outputNo,
       ctime: coin.meta?.ctime,
       registeredForDustGeneration: coin.meta?.registeredForDustGeneration ?? false,
-      transactionLookup: `/api/transaction/${coin.utxo.intentHash}?network=${cfg.networkId}`,
     }));
     const totalRaw = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
     return {
