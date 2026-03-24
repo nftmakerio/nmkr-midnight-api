@@ -28,7 +28,7 @@ import {
   mintNft,
 } from './midnight-service.js';
 import { NETWORKS } from './networks.js';
-import { walletManager } from './wallet-manager.js';
+import { walletManager, addressWatcher } from './wallet-manager.js';
 
 const app = express();
 app.use(cors());
@@ -258,32 +258,34 @@ swaggerSpec.paths = {
   },
   '/api/watch/add': {
     post: {
-      tags: ['Watch'], summary: 'Add wallet to watch list',
-      description: 'Starts persistent monitoring for a wallet. The wallet stays synced via WebSocket — all subsequent queries (balance, UTXOs, transactions) return instantly. Seeds are stored on disk and reconnected on server restart.',
-      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
-        seed: { type: 'string', description: 'Wallet seed to watch' },
+      tags: ['Watch'], summary: 'Add wallet/address to watch list',
+      description: 'Two modes:\n\n**With address only (lightweight):** Polls balance every 30s via CLI. No seed required. Returns balance + UTXO count.\n\n**With seed (full):** Persistent WebSocket sync. Returns balance, UTXOs, dust, transactions instantly.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
+        address: { type: 'string', description: 'Unshielded address (mn_addr_...) — lightweight mode, no seed needed', example: 'mn_addr_preview1c0g6vynydk8p6clmd548lhgw6pchd0hsuzqdyvj5zrptguul22mspy9xw6' },
+        seed: { type: 'string', description: 'Wallet seed — full mode with WebSocket sync' },
         network: networkEnum,
-        label: { type: 'string', description: 'Optional label for identification', example: 'Treasury Wallet' },
+        label: { type: 'string', description: 'Optional label', example: 'Treasury Wallet' },
       } } } } },
-      responses: { 200: { description: 'Wallet added and syncing' }, 500: { description: 'Error' } },
+      responses: { 200: { description: 'Wallet/address added' }, 400: { description: 'Either address or seed is required' }, 500: { description: 'Error' } },
     },
   },
   '/api/watch/remove': {
     post: {
-      tags: ['Watch'], summary: 'Remove wallet from watch list',
-      description: 'Stops monitoring a wallet and closes the WebSocket connection.',
-      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
+      tags: ['Watch'], summary: 'Remove wallet/address from watch list',
+      description: 'Stops monitoring. Provide the same field (address or seed) used when adding.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
+        address: { type: 'string' },
         seed: { type: 'string' },
         network: networkEnum,
       } } } } },
-      responses: { 200: { description: 'Wallet removed' }, 404: { description: 'Wallet not found in watch list' } },
+      responses: { 200: { description: 'Removed' }, 404: { description: 'Not found in watch list' } },
     },
   },
   '/api/watch/list': {
     get: {
-      tags: ['Watch'], summary: 'List all watched wallets',
-      description: 'Returns all watched wallets with current balances, sync status and addresses. Data is live — no additional sync needed.',
-      responses: { 200: { description: 'Watched wallet list' } },
+      tags: ['Watch'], summary: 'List all watched wallets and addresses',
+      description: 'Returns all watched items with current balances and sync status.',
+      responses: { 200: { description: 'Watched list' } },
     },
   },
   '/api/nft/create-collection': {
@@ -464,32 +466,63 @@ app.post('/api/nft/mint', async (req, res) => {
 
 app.post('/api/watch/add', async (req, res) => {
   try {
-    const { seed, network, label } = req.body;
-    if (!seed) return res.status(400).json({ error: 'seed is required' });
+    const { seed, address, network, label } = req.body;
     const n = network || 'preview';
-    const managed = await walletManager.add(seed, n, label);
-    res.json({
-      status: 'watching',
-      synced: managed.synced,
-      label: managed.info.label,
-      network: n,
-      ...managed.addresses,
-    });
+
+    if (seed) {
+      // Full mode — SDK WebSocket sync
+      const managed = await walletManager.add(seed, n, label);
+      res.json({
+        mode: 'full',
+        status: 'watching',
+        synced: managed.synced,
+        label: managed.info.label,
+        network: n,
+        ...managed.addresses,
+      });
+    } else if (address) {
+      // Lightweight mode — CLI polling
+      const entry = addressWatcher.add(address, n, label);
+      res.json({
+        mode: 'lightweight',
+        status: 'watching',
+        address: entry.address,
+        label: entry.label,
+        network: n,
+        pollInterval: '30s',
+        lastBalance: entry.lastBalance,
+        lastChecked: entry.lastChecked,
+      });
+    } else {
+      return res.status(400).json({ error: 'Either address or seed is required' });
+    }
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/watch/remove', async (req, res) => {
   try {
-    const { seed, network } = req.body;
-    if (!seed) return res.status(400).json({ error: 'seed is required' });
-    const removed = await walletManager.remove(seed, network || 'preview');
-    if (!removed) return res.status(404).json({ error: 'Wallet not found in watch list' });
-    res.json({ status: 'removed' });
+    const { seed, address, network } = req.body;
+    const n = network || 'preview';
+
+    if (seed) {
+      const removed = await walletManager.remove(seed, n);
+      if (!removed) return res.status(404).json({ error: 'Wallet not found in watch list' });
+      res.json({ status: 'removed', mode: 'full' });
+    } else if (address) {
+      const removed = addressWatcher.remove(address, n);
+      if (!removed) return res.status(404).json({ error: 'Address not found in watch list' });
+      res.json({ status: 'removed', mode: 'lightweight' });
+    } else {
+      return res.status(400).json({ error: 'Either address or seed is required' });
+    }
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/watch/list', (_req, res) => {
-  res.json({ wallets: walletManager.list() });
+  res.json({
+    fullWallets: walletManager.list(),
+    addressWatches: addressWatcher.list(),
+  });
 });
 
 app.get('/api/nft/query/:contractAddress', async (req, res) => {
@@ -512,6 +545,7 @@ app.get('/api/health', (_req, res) => {
 const PORT = process.env.PORT || 3000;
 
 // Initialize wallet manager (reconnect watched wallets), then start server
+addressWatcher.initialize();
 walletManager.initialize().then(() => {
   app.listen(PORT, () => {
     console.log('');

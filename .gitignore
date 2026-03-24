@@ -17,6 +17,7 @@ nft-mint-*/
 *.wallet.json
 .midnight/
 watched-wallets.json
+watched-addresses.json
 
 # Environment
 .env

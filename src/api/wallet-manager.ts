@@ -271,5 +271,142 @@ class WalletManager {
   }
 }
 
-// Singleton instance
+// ================================================================
+// Address Watch — lightweight CLI-based polling (no seed required)
+// ================================================================
+
+interface WatchedAddress {
+  address: string;
+  network: string;
+  label?: string;
+  addedAt: string;
+  lastBalance: any;
+  lastChecked: string | null;
+}
+
+const ADDRESS_WATCH_FILE = path.resolve(__dirname, '../../watched-addresses.json');
+
+class AddressWatcher {
+  private addresses = new Map<string, WatchedAddress>();
+  private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private pollIntervalMs = 30_000; // 30 seconds
+
+  private key(address: string, network: string) { return `${address}:${network}`; }
+
+  initialize() {
+    const saved = this.loadFromDisk();
+    for (const entry of saved) {
+      this.addresses.set(this.key(entry.address, entry.network), entry);
+    }
+    console.log(`[AddressWatcher] Loaded ${this.addresses.size} watched address(es).`);
+
+    if (this.addresses.size > 0) {
+      this.startPolling();
+    }
+  }
+
+  add(address: string, network: string, label?: string): WatchedAddress {
+    const k = this.key(address, network);
+    if (this.addresses.has(k)) {
+      return this.addresses.get(k)!;
+    }
+
+    const entry: WatchedAddress = {
+      address,
+      network,
+      label,
+      addedAt: new Date().toISOString(),
+      lastBalance: null,
+      lastChecked: null,
+    };
+    this.addresses.set(k, entry);
+    this.saveToDisk();
+
+    // Start polling if not already running
+    if (!this.pollInterval) this.startPolling();
+
+    // Immediately poll this address
+    this.pollAddress(entry).catch(() => {});
+
+    return entry;
+  }
+
+  remove(address: string, network: string): boolean {
+    const k = this.key(address, network);
+    if (!this.addresses.has(k)) return false;
+    this.addresses.delete(k);
+    this.saveToDisk();
+
+    if (this.addresses.size === 0 && this.pollInterval) {
+      clearInterval(this.pollInterval);
+      this.pollInterval = null;
+    }
+    return true;
+  }
+
+  // Get cached balance for an address (instant)
+  getBalance(address: string, network: string): WatchedAddress | null {
+    return this.addresses.get(this.key(address, network)) || null;
+  }
+
+  list(): WatchedAddress[] {
+    return Array.from(this.addresses.values());
+  }
+
+  private startPolling() {
+    if (this.pollInterval) return;
+    console.log(`[AddressWatcher] Starting poll every ${this.pollIntervalMs / 1000}s...`);
+    this.pollInterval = setInterval(() => this.pollAll(), this.pollIntervalMs);
+    // Poll immediately on start
+    this.pollAll();
+  }
+
+  private async pollAll() {
+    for (const entry of this.addresses.values()) {
+      await this.pollAddress(entry).catch(() => {});
+    }
+  }
+
+  private async pollAddress(entry: WatchedAddress) {
+    try {
+      const { execFile } = await import('node:child_process');
+      const { promisify } = await import('node:util');
+      const execFileAsync = promisify(execFile);
+
+      const args = ['balance', entry.address, '--json'];
+      if (entry.network) args.push('--network', entry.network);
+
+      const { stdout } = await execFileAsync('midnight', args, { timeout: 30_000 });
+      const result = JSON.parse(stdout.trim());
+
+      entry.lastBalance = {
+        balances: result.balances,
+        utxoCount: result.utxoCount,
+        txCount: result.txCount,
+      };
+      entry.lastChecked = new Date().toISOString();
+    } catch (err: any) {
+      entry.lastChecked = new Date().toISOString();
+      // Keep last known balance, just update timestamp
+    }
+  }
+
+  private loadFromDisk(): WatchedAddress[] {
+    try {
+      if (fs.existsSync(ADDRESS_WATCH_FILE)) {
+        return JSON.parse(fs.readFileSync(ADDRESS_WATCH_FILE, 'utf-8'));
+      }
+    } catch {}
+    return [];
+  }
+
+  private saveToDisk() {
+    const data = Array.from(this.addresses.values()).map(({ address, network, label, addedAt }) =>
+      ({ address, network, label, addedAt }));
+    fs.writeFileSync(ADDRESS_WATCH_FILE, JSON.stringify(data, null, 2));
+  }
+}
+
+// Singleton instances
 export const walletManager = new WalletManager();
+export const addressWatcher = new AddressWatcher();
