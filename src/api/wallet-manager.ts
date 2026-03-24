@@ -175,8 +175,17 @@ class WalletManager {
   list(): any[] {
     return Array.from(this.wallets.values()).map(m => {
       const nightBalance = m.lastState?.unshielded?.balances?.[unshieldedToken().raw] ?? 0n;
-      const dustCoins = m.lastState?.dust?.availableCoins?.length ?? 0;
       const utxoCount = m.lastState?.unshielded?.availableCoins?.length ?? 0;
+
+      let dustRaw = '0';
+      try {
+        const cb = m.lastState?.dust?.capabilities?.coinsAndBalances;
+        if (cb && typeof cb.getWalletBalance === 'function') {
+          dustRaw = cb.getWalletBalance(m.lastState.dust.state, new Date()).toString();
+        }
+      } catch {}
+      const dustNum = Number(dustRaw) / 1_000_000_000_000;
+
       return {
         label: m.info.label,
         network: m.info.network,
@@ -186,7 +195,9 @@ class WalletManager {
         balances: {
           night: nightBalance.toString(),
           nightFormatted: `${Number(nightBalance) / 1_000_000} NIGHT`,
-          dustCoins,
+          dustRaw,
+          dustFormatted: `${dustNum.toFixed(4)} DUST`,
+          dustCoins: m.lastState?.dust?.availableCoins?.length ?? 0,
           utxoCount,
         },
       };

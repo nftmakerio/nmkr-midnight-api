@@ -156,18 +156,34 @@ export async function getBalanceByAddress(address: string, network?: string) {
   };
 }
 
+function getDustBalance(dustState: any): { dustRaw: string; dustFormatted: string; dustCoins: number } {
+  let dustRaw = '0';
+  try {
+    const cb = dustState.capabilities?.coinsAndBalances;
+    if (cb && typeof cb.getWalletBalance === 'function') {
+      dustRaw = cb.getWalletBalance(dustState.state, new Date()).toString();
+    }
+  } catch {}
+  const dustNum = Number(dustRaw) / 1_000_000_000_000;
+  return {
+    dustRaw,
+    dustFormatted: `${dustNum.toFixed(4)} DUST`,
+    dustCoins: dustState.availableCoins?.length ?? 0,
+  };
+}
+
 export async function getBalanceBySeed(seed: string, network?: string) {
   const cfg = useNetwork(network);
   return withWallet(seed, cfg, async (_ctx, state) => {
     const nightBalance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
-    const dustCoins = state.dust.availableCoins?.length ?? 0;
+    const dust = getDustBalance(state.dust);
     const info = getWalletInfo(seed, network);
     return {
       ...info,
       balances: {
         night: nightBalance.toString(),
         nightFormatted: `${Number(nightBalance) / 1_000_000} NIGHT`,
-        dustCoins,
+        ...dust,
       },
     };
   });
