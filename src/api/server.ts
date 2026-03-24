@@ -16,6 +16,7 @@ import {
   getWalletInfo,
   getBalanceBySeed,
   getBalanceByAddress,
+  recoverFromMnemonic,
   resolveShieldedAddress,
   transferNight,
   queryNftContract,
@@ -94,6 +95,17 @@ swaggerSpec.paths = {
         network: networkEnum,
       } } } } },
       responses: { 200: { description: 'Wallet info' }, 400: { description: 'Error' } },
+    },
+  },
+  '/api/wallet/recover': {
+    post: {
+      tags: ['Wallet'], summary: 'Recover wallet from mnemonic',
+      description: 'Derives the seed and all addresses from a 24-word BIP39 mnemonic phrase.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['mnemonic'], properties: {
+        mnemonic: { type: 'string', description: '24-word recovery phrase', example: 'hockey spring pottery noble guess purchase inform improve walnut expand drink body notable opinion dish abuse ketchup file win animal embody ethics donor march' },
+        network: networkEnum,
+      } } } } },
+      responses: { 200: { description: 'Recovered wallet info' }, 400: { description: 'Invalid mnemonic' } },
     },
   },
   '/api/wallet/resolve-shielded': {
@@ -356,6 +368,14 @@ app.post('/api/wallet/info', (req, res) => {
     const { seed, network } = req.body;
     if (!seed) return res.status(400).json({ error: 'seed is required' });
     res.json(getWalletInfo(seed, network));
+  } catch (err: any) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/wallet/recover', (req, res) => {
+  try {
+    const { mnemonic, network } = req.body;
+    if (!mnemonic) return res.status(400).json({ error: 'mnemonic is required' });
+    res.json(recoverFromMnemonic(mnemonic, network));
   } catch (err: any) { res.status(400).json({ error: err.message }); }
 });
 

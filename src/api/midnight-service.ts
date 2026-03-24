@@ -114,6 +114,15 @@ export function getWalletInfo(seed: string, network?: string) {
   };
 }
 
+export function recoverFromMnemonic(mnemonic: string, network?: string) {
+  const cfg = useNetwork(network);
+  if (!bip39.validateMnemonic(mnemonic)) {
+    throw new Error('Invalid mnemonic phrase');
+  }
+  const seed = bip39.mnemonicToSeedSync(mnemonic).subarray(0, 32).toString('hex');
+  return getWalletInfo(seed, network);
+}
+
 export function resolveShieldedAddress(shieldedAddr: string) {
   const parsed = MidnightBech32m.parse(shieldedAddr);
   const network = parsed.network;
