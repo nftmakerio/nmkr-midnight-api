@@ -26,6 +26,7 @@ import {
   registerDust,
   createCollection,
   mintNft,
+  transferNft,
 } from './midnight-service.js';
 import { NETWORKS } from './networks.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
@@ -341,6 +342,30 @@ swaggerSpec.paths = {
       },
     },
   },
+  '/api/nft/transfer': {
+    post: {
+      tags: ['NFT'], summary: 'Transfer an NFT to another address',
+      description: 'Transfers an existing NFT to a new owner. Requires the ownerSeed of the current NFT holder, the contractAddress of the collection, and the tokenId of the specific NFT.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'contractAddress', 'tokenId'], properties: {
+        ownerSeed: { type: 'string', description: 'Seed of the current NFT owner' },
+        contractAddress: { type: 'string', description: 'Contract address of the NFT collection' },
+        tokenId: { type: 'string', description: 'Token ID to transfer (e.g. "0", "1")', example: '0' },
+        toCoinPublicKey: { type: 'string', description: 'Recipient CoinPublicKey (hex)' },
+        toShieldedAddress: { type: 'string', description: 'Recipient shielded address (mn_shield-addr_...) — resolved automatically' },
+        network: networkEnum,
+      } } } } },
+      responses: {
+        200: { description: 'NFT transferred', content: { 'application/json': { schema: { type: 'object', properties: {
+          contractAddress: { type: 'string' },
+          tokenId: { type: 'string' },
+          from: { type: 'string', description: 'CoinPublicKey of previous owner' },
+          to: { type: 'string', description: 'CoinPublicKey of new owner' },
+          network: { type: 'string' },
+        } } } } },
+        500: { description: 'Error' },
+      },
+    },
+  },
   '/api/nft/query/{contractAddress}': {
     get: {
       tags: ['NFT'], summary: 'Query NFT contract state',
@@ -525,6 +550,15 @@ app.get('/api/watch/list', (_req, res) => {
     fullWallets: walletManager.list(),
     addressWatches: addressWatcher.list(),
   });
+});
+
+app.post('/api/nft/transfer', async (req, res) => {
+  try {
+    const { ownerSeed, contractAddress, tokenId, toCoinPublicKey, toShieldedAddress, network } = req.body;
+    if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
+    if (!toCoinPublicKey && !toShieldedAddress) return res.status(400).json({ error: 'Either toCoinPublicKey or toShieldedAddress is required' });
+    res.json(await transferNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress, network }));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/nft/query/:contractAddress', async (req, res) => {

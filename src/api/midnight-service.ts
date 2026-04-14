@@ -704,6 +704,71 @@ export async function mintNft(params: {
   }
 }
 
+export async function transferNft(params: {
+  ownerSeed: string;
+  contractAddress: string;
+  tokenId: string;
+  toCoinPublicKey?: string;
+  toShieldedAddress?: string;
+  network?: string;
+}) {
+  const cfg = useNetwork(params.network);
+  const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
+  if (!resolvedTo) throw new Error('Either toCoinPublicKey or toShieldedAddress is required');
+
+  const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
+  const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
+    CompiledContract.withVacantWitnesses,
+    CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
+  );
+
+  const { ctx, cached } = await getWalletCtx(params.ownerSeed, cfg);
+  try {
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
+    const coinPublicKey = state.shielded.coinPublicKey.toHexString();
+
+    const bridge = await createProviderBridge(ctx);
+    const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
+
+    const { findDeployedContract } = await import('@midnight-ntwrk/midnight-js-contracts');
+    const providers = {
+      privateStateProvider: levelPrivateStateProvider({
+        privateStateStoreName: `nft-transfer-${Date.now()}`,
+        walletProvider: bridge,
+        privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
+        accountId: coinPublicKey.substring(0, 32),
+      }),
+      publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
+      zkConfigProvider,
+      proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
+      walletProvider: bridge,
+      midnightProvider: bridge,
+    };
+
+    const contract = await findDeployedContract(providers, {
+      compiledContract,
+      contractAddress: params.contractAddress,
+      privateStateId: 'nftPrivateState',
+      initialPrivateState: {},
+    });
+
+    const transferTo = { bytes: Buffer.from(resolvedTo, 'hex') };
+    const tokenIdBigInt = BigInt(params.tokenId);
+
+    await contract.callTx.transfer(transferTo, tokenIdBigInt);
+
+    return {
+      contractAddress: params.contractAddress,
+      tokenId: params.tokenId,
+      from: coinPublicKey,
+      to: resolvedTo,
+      network: cfg.networkId,
+    };
+  } finally {
+    if (!cached) await ctx.facade.stop();
+  }
+}
+
 // ---- Provider Bridge (internal) ----
 
 async function createProviderBridge(ctx: WalletContext) {
