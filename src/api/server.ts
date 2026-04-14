@@ -48,7 +48,9 @@ const swaggerSpec: any = swaggerJsdoc({
 
 Supported networks: **preview**, **preprod**, **mainnet**
 
-Every endpoint accepts an optional \`network\` parameter. Default is \`preview\`.`,
+Every endpoint accepts an optional \`network\` parameter. Default is \`preview\`.
+
+**Seeds:** Use the full 128-char hex seed (from mnemonic recovery) for 1AM/Lace wallet compatibility. 64-char seeds also work but produce different addresses.`,
     },
     servers: [
       { url: 'https://midnight-api.nmkr.io', description: 'Production' },
@@ -91,7 +93,7 @@ swaggerSpec.paths = {
       tags: ['Wallet'], summary: 'Wallet info from seed',
       description: 'Derives CoinPublicKey and addresses from a seed.',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
-        seed: { type: 'string', example: '5791029dcb19e89d09c369e13856ae279495dff7a183c982f34ba1fab510ecbc' },
+        seed: { type: 'string', description: 'Hex seed (64 or 128 hex chars). Use 128 chars (full BIP39 seed) for 1AM/Lace compatibility.' },
         network: networkEnum,
       } } } } },
       responses: { 200: { description: 'Wallet info' }, 400: { description: 'Error' } },
