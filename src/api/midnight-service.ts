@@ -340,7 +340,7 @@ export async function deployAndMintNft(params: {
       privateStateProvider: levelPrivateStateProvider({
         privateStateStoreName: `nft-state-${Date.now()}`,
         walletProvider: bridge,
-        privateStoragePasswordProvider: () => Promise.resolve('Midnight-NFT-Local-Dev-2026!'),
+        privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
@@ -588,7 +588,7 @@ export async function createCollection(params: {
       privateStateProvider: levelPrivateStateProvider({
         privateStateStoreName: `nft-collection-${Date.now()}`,
         walletProvider: bridge,
-        privateStoragePasswordProvider: () => Promise.resolve('Midnight-NFT-Local-Dev-2026!'),
+        privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
@@ -671,7 +671,7 @@ export async function mintNft(params: {
       privateStateProvider: levelPrivateStateProvider({
         privateStateStoreName: `nft-mint-${Date.now()}`,
         walletProvider: bridge,
-        privateStoragePasswordProvider: () => Promise.resolve('Midnight-NFT-Local-Dev-2026!'),
+        privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
