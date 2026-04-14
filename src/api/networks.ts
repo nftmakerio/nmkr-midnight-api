@@ -23,8 +23,8 @@ export const NETWORKS: Record<NetworkName, NetworkConfig> = {
   preprod: {
     networkId: 'preprod',
     nodeRpc: 'https://rpc.preprod.midnight.network',
-    indexerHttp: 'https://indexer.preprod.midnight.network/api/v3/graphql',
-    indexerWs: 'wss://indexer.preprod.midnight.network/api/v3/graphql/ws',
+    indexerHttp: 'https://indexer.preprod.midnight.network/api/v4/graphql',
+    indexerWs: 'wss://indexer.preprod.midnight.network/api/v4/graphql/ws',
     proofServer: 'http://localhost:6300',
   },
   mainnet: {
