@@ -144,7 +144,7 @@ main().catch((err) => {
     console.error('💡 Tip: The public proof server may not be reachable.');
     console.error('   Check: https://lace-proof-pub.preview.midnight.network');
   }
-  if (String(err).includes('Nur der Besitzer')) {
+  if (String(err).includes('Only the owner')) {
     console.error('');
     console.error('💡 You are not the owner of this NFT.');
   }

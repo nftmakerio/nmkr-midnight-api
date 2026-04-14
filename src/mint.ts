@@ -136,7 +136,7 @@ main().catch((err) => {
     console.error('💡 Tip: The public proof server may not be reachable.');
     console.error('   Check: https://lace-proof-pub.preview.midnight.network');
   }
-  if (String(err).includes('Nur der Contract-Owner')) {
+  if (String(err).includes('Only the contract owner')) {
     console.error('');
     console.error('💡 Only the contract owner is allowed to mint new NFTs.');
   }
