@@ -88,8 +88,8 @@ export function createNewWallet(network?: string) {
   const cfg = useNetwork(network);
   // Generate 24-word mnemonic (256 bits of entropy)
   const mnemonic = bip39.generateMnemonic(256);
-  // Derive 32-byte seed from mnemonic
-  const seed = bip39.mnemonicToSeedSync(mnemonic).subarray(0, 32).toString('hex');
+  // Derive full 64-byte seed from mnemonic (compatible with 1AM/Lace wallets)
+  const seed = bip39.mnemonicToSeedSync(mnemonic).toString('hex');
   return { ...getWalletInfo(seed, network), mnemonic };
 }
 
@@ -119,7 +119,8 @@ export function recoverFromMnemonic(mnemonic: string, network?: string) {
   if (!bip39.validateMnemonic(mnemonic)) {
     throw new Error('Invalid mnemonic phrase');
   }
-  const seed = bip39.mnemonicToSeedSync(mnemonic).subarray(0, 32).toString('hex');
+  // Use full 64-byte seed (compatible with 1AM/Lace wallets)
+  const seed = bip39.mnemonicToSeedSync(mnemonic).toString('hex');
   return getWalletInfo(seed, network);
 }
 
