@@ -1,24 +1,16 @@
 {
-  "name": "midnight-nft-project",
-  "version": "1.0.0",
+  "name": "nmkr-midnight-api",
+  "version": "1.1.0",
   "type": "module",
-  "description": "NFT erstellen und transferieren auf dem Midnight Preview-Netzwerk",
+  "description": "REST API for the Midnight Network — wallet management, NIGHT transfers, NFT minting with Swagger UI",
   "scripts": {
-    "compile": "compact compile contracts/nmkr-nft.compact contracts/managed/nmkr-nft",
-    "deploy": "tsx src/deploy-and-mint.ts",
-    "deploy-mint": "tsx src/deploy-and-mint-v2.ts",
-    "mint": "tsx src/mint.ts",
-    "transfer": "tsx src/transfer-nft.ts",
-    "transfer-night": "tsx src/transfer-night.ts",
     "api": "tsx src/api/server.ts",
-    "seed-info": "tsx src/seed-info.ts",
-    "query-nft": "tsx src/query-nft.ts",
-    "proof-server": "docker run -p 6300:6300 midnightntwrk/proof-server:7.0.0 -- midnight-proof-server -v"
+    "compile": "compactc --skip-zk contracts/nmkr-nft.compact contracts/managed/nmkr-nft",
+    "proof-server": "docker run -p 6300:6300 midnightntwrk/proof-server:7.0.0 midnight-proof-server -v"
   },
   "dependencies": {
     "@midnight-ntwrk/compact-js": "2.4.3",
     "@midnight-ntwrk/compact-runtime": "0.14.0",
-    "@midnight-ntwrk/ledger": "4.0.0",
     "@midnight-ntwrk/ledger-v7": "7.0.3",
     "@midnight-ntwrk/midnight-js-contracts": "3.2.0",
     "@midnight-ntwrk/midnight-js-http-client-proof-provider": "3.2.0",
