@@ -72,10 +72,10 @@ The compiled contract artifacts are not included in the repo. You need to compil
 
 ```bash
 # Compile the Compact contract (skip local ZK key generation)
-compact --skip-zk contracts/my-nft.compact contracts/managed/my-nft
+compact --skip-zk contracts/nmkr-nft.compact contracts/managed/nmkr-nft
 
 # Generate ZK keys via Docker (needed because zkir may not run on all CPUs)
-docker run --rm -v $(pwd)/contracts/managed/my-nft:/data \
+docker run --rm -v $(pwd)/contracts/managed/nmkr-nft:/data \
   --platform linux/amd64 ubuntu:22.04 bash -c "
   apt-get update -qq && apt-get install -qq -y curl unzip >/dev/null 2>&1
   curl -sL https://github.com/midnightntwrk/compact/releases/download/compactc-v0.29.0/compactc_v0.29.0_x86_64-unknown-linux-musl.zip -o /tmp/compact.zip
@@ -158,7 +158,7 @@ The shielded address contains both the CoinPublicKey and EncryptionPublicKey. Us
 
 ## NFT Smart Contract
 
-The NFT contract (`contracts/my-nft.compact`) implements:
+The NFT contract (`contracts/nmkr-nft.compact`) implements:
 
 - **create-collection**: Deploy with collection name, symbol, and owner
 - **mint**: Only the contract owner can mint. NFTs can be minted directly to any CoinPublicKey

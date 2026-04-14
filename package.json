@@ -4,7 +4,7 @@
   "type": "module",
   "description": "NFT erstellen und transferieren auf dem Midnight Preview-Netzwerk",
   "scripts": {
-    "compile": "compact compile contracts/my-nft.compact contracts/managed/my-nft",
+    "compile": "compact compile contracts/nmkr-nft.compact contracts/managed/nmkr-nft",
     "deploy": "tsx src/deploy-and-mint.ts",
     "deploy-mint": "tsx src/deploy-and-mint-v2.ts",
     "mint": "tsx src/mint.ts",

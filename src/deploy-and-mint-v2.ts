@@ -12,7 +12,7 @@
 //   --symbol "MNFT"         Collection symbol (default: "MNFT")
 //
 // Prerequisites:
-//   1. Contract compiled: compact --skip-zk contracts/my-nft.compact contracts/managed/my-nft
+//   1. Contract compiled: compact --skip-zk contracts/nmkr-nft.compact contracts/managed/nmkr-nft
 //   2. Proof server running on localhost:6300
 //   3. Wallet has NIGHT + DUST
 // =============================================================
@@ -169,7 +169,7 @@ function parseArgs() {
 
 async function main() {
   const args = parseArgs();
-  const contractPath = path.resolve(__dirname, '../contracts/managed/my-nft');
+  const contractPath = path.resolve(__dirname, '../contracts/managed/nmkr-nft');
 
   console.log('=== Midnight NFT - Deploy & Mint ===');
   console.log('');
@@ -190,13 +190,13 @@ async function main() {
     contractModule = await import(path.join(contractPath, 'contract', 'index.js'));
   } catch (e) {
     console.error('Contract not found! Compile first:');
-    console.error('  compact --skip-zk contracts/my-nft.compact contracts/managed/my-nft');
+    console.error('  compact --skip-zk contracts/nmkr-nft.compact contracts/managed/nmkr-nft');
     process.exit(1);
   }
 
   // Prepare CompiledContract with ZK artifacts
   const ContractClass = contractModule.Contract || contractModule.default?.Contract;
-  const compiledContract = CompiledContract.make('my-nft', ContractClass).pipe(
+  const compiledContract = CompiledContract.make('nmkr-nft', ContractClass).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(contractPath, 'keys')),
   );

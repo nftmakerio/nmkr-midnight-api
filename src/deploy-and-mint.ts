@@ -68,7 +68,7 @@ async function main() {
   initializeNetwork();
 
   // 2. Load compiled contract
-  const contractPath = path.resolve(__dirname, '../contracts/managed/my-nft');
+  const contractPath = path.resolve(__dirname, '../contracts/managed/nmkr-nft');
   console.log(`📦 Loading contract from: ${contractPath}`);
 
   let compiledContract: any;

@@ -39,7 +39,7 @@ async function main() {
   setNetworkId(NETWORK);
 
   // Load contract module (for the ledger() function)
-  const contractPath = path.resolve(__dirname, '../contracts/managed/my-nft');
+  const contractPath = path.resolve(__dirname, '../contracts/managed/nmkr-nft');
   const contractModule = await import(path.join(contractPath, 'contract', 'index.js'));
   const ledgerParser = contractModule.ledger;
 

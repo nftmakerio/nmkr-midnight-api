@@ -39,7 +39,7 @@ import { walletManager, type WalletContext } from './wallet-manager.js';
 globalThis.WebSocket = WebSocket;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const CONTRACT_PATH = path.resolve(__dirname, '../../contracts/managed/my-nft');
+const CONTRACT_PATH = path.resolve(__dirname, '../../contracts/managed/nmkr-nft');
 
 // ---- Network Helpers ----
 
@@ -319,7 +319,7 @@ export async function deployAndMintNft(params: {
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
 
   const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
-  const compiledContract = CompiledContract.make('my-nft', contractModule.Contract).pipe(
+  const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
@@ -571,7 +571,7 @@ export async function createCollection(params: {
   const walletInfo = getWalletInfo(seed, params.network);
 
   const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
-  const compiledContract = CompiledContract.make('my-nft', contractModule.Contract).pipe(
+  const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
@@ -649,7 +649,7 @@ export async function mintNft(params: {
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
 
   const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
-  const compiledContract = CompiledContract.make('my-nft', contractModule.Contract).pipe(
+  const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );

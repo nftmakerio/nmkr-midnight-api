@@ -71,7 +71,7 @@ async function main() {
   initializeNetwork();
 
   // 2. Load contract artifacts
-  const contractPath = path.resolve(__dirname, '../contracts/managed/my-nft');
+  const contractPath = path.resolve(__dirname, '../contracts/managed/nmkr-nft');
 
   let compiledContract: any;
   try {
