@@ -135,6 +135,22 @@ class WalletManager {
     return this.wallets.get(seed) || null;
   }
 
+  // Find a watched wallet by any of its addresses (shielded, unshielded, coinPublicKey)
+  findByAddress(address: string): ManagedWallet | null {
+    for (const m of this.wallets.values()) {
+      if (m.addresses.shieldedAddress === address) return m;
+      if (m.addresses.unshieldedAddress === address) return m;
+      if (m.addresses.coinPublicKey === address) return m;
+    }
+    return null;
+  }
+
+  async removeByAddress(address: string): Promise<boolean> {
+    const m = this.findByAddress(address);
+    if (!m) return false;
+    return this.remove(m.info.seed);
+  }
+
   async getOrCreateContext(seed: string): Promise<{ ctx: WalletContext; cached: boolean }> {
     const managed = this.get(seed);
     if (managed && managed.synced) {

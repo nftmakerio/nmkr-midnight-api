@@ -552,14 +552,19 @@ app.post('/api/watch/remove', async (req, res) => {
     if (seed) {
       const removed = await walletManager.remove(seed);
       if (!removed) return res.status(404).json({ error: 'Wallet not found in watch list' });
-      res.json({ status: 'removed', mode: 'full' });
-    } else if (address) {
-      const removed = addressWatcher.remove(address);
-      if (!removed) return res.status(404).json({ error: 'Address not found in watch list' });
-      res.json({ status: 'removed', mode: 'lightweight' });
-    } else {
-      return res.status(400).json({ error: 'Either address or seed is required' });
+      return res.json({ status: 'removed', mode: 'full' });
     }
+    if (address) {
+      // Try lightweight watch first, then seed-based watch by address
+      if (addressWatcher.remove(address)) {
+        return res.json({ status: 'removed', mode: 'lightweight' });
+      }
+      if (await walletManager.removeByAddress(address)) {
+        return res.json({ status: 'removed', mode: 'full' });
+      }
+      return res.status(404).json({ error: 'Address not found in watch list' });
+    }
+    return res.status(400).json({ error: 'Either address or seed is required' });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
