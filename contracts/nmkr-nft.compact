@@ -12,6 +12,7 @@ export ledger contractOwner: ZswapCoinPublicKey;
 export ledger nextTokenId: Counter;
 export ledger owners: Map<Uint<128>, ZswapCoinPublicKey>;
 export ledger tokenURIs: Map<Uint<128>, Opaque<"string">>;
+export ledger tokenNames: Map<Uint<128>, Opaque<"string">>;
 export ledger balanceMap: Map<ZswapCoinPublicKey, Counter>;
 
 // ---- Constructor ----
@@ -48,6 +49,12 @@ export circuit tokenURI(tokenId: Uint<128>): Opaque<"string"> {
   return tokenURIs.lookup(d_tokenId);
 }
 
+export circuit tokenName(tokenId: Uint<128>): Opaque<"string"> {
+  const d_tokenId = disclose(tokenId);
+  assert(tokenNames.member(d_tokenId), "Token does not exist");
+  return tokenNames.lookup(d_tokenId);
+}
+
 export circuit totalSupply(): Uint<64> {
   return nextTokenId.read();
 }
@@ -56,17 +63,20 @@ export circuit totalSupply(): Uint<64> {
 
 export circuit mint(
   to: ZswapCoinPublicKey,
-  uri: Opaque<"string">
+  uri: Opaque<"string">,
+  name: Opaque<"string">
 ): Uint<64> {
   assert(ownPublicKey() == contractOwner, "Only the contract owner can mint");
 
   const d_to = disclose(to);
   const d_uri = disclose(uri);
+  const d_name = disclose(name);
   const tokenId = nextTokenId.read();
   const tokenIdKey = tokenId as Uint<128>;
 
   owners.insert(tokenIdKey, d_to);
   tokenURIs.insert(tokenIdKey, d_uri);
+  tokenNames.insert(tokenIdKey, d_name);
 
   if (balanceMap.member(d_to)) {
     balanceMap.lookup(d_to).increment(1);

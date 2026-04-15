@@ -54,6 +54,9 @@ function maskSecrets(obj: any): any {
   return clone;
 }
 
+// Trust X-Forwarded-For headers from Nginx reverse proxy
+app.set('trust proxy', true);
+
 app.use((req, res, next) => {
   const start = Date.now();
   const bodyPreview = Object.keys(req.body || {}).length > 0
@@ -62,11 +65,12 @@ app.use((req, res, next) => {
   const queryPreview = Object.keys(req.query || {}).length > 0
     ? ` query=${JSON.stringify(req.query)}`
     : '';
+  const ip = req.ip || req.socket.remoteAddress || '-';
 
   res.on('finish', () => {
     const duration = Date.now() - start;
     const ts = new Date().toISOString();
-    console.log(`[${ts}] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)${bodyPreview}${queryPreview}`);
+    console.log(`[${ts}] ${ip} ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)${bodyPreview}${queryPreview}`);
   });
 
   next();
@@ -349,10 +353,11 @@ swaggerSpec.paths = {
     post: {
       tags: ['NFT'], summary: 'Mint NFT in existing collection',
       description: 'Mints a new NFT in an existing collection. Requires the ownerSeed (from create-collection). If contractAddress is missing, a new collection is created automatically.',
-      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'uri'], properties: {
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'uri', 'name'], properties: {
         ownerSeed: { type: 'string', description: 'Seed of the collection owner (from create-collection)' },
         contractAddress: { type: 'string', description: 'Contract address of the collection. If empty, a new collection is created.' },
         uri: { type: 'string', description: 'Metadata URI (JSON)', example: 'ipfs://example/token-1.json' },
+        name: { type: 'string', description: 'NFT name (required, stored on-chain)', example: 'My First NFT' },
         toCoinPublicKey: { type: 'string', description: 'Optional: recipient CoinPublicKey (hex)' },
         toShieldedAddress: { type: 'string', description: 'Optional: shielded address (mn_shield-addr_...) — resolved automatically' },
         collection: { type: 'string', description: 'Only for new collection: name', example: 'MidnightNFT' },
@@ -364,9 +369,11 @@ swaggerSpec.paths = {
           tokenId: { type: 'string' },
           owner: { type: 'string' },
           uri: { type: 'string' },
+          name: { type: 'string' },
           network: { type: 'string' },
           newCollection: { type: 'boolean', description: 'true if a new collection was created' },
         } } } } },
+        400: { description: 'Missing required fields' },
         500: { description: 'Error' },
       },
     },
@@ -508,9 +515,9 @@ app.post('/api/nft/create-collection', async (req, res) => {
 
 app.post('/api/nft/mint', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, uri, toCoinPublicKey, toShieldedAddress, collection, symbol } = req.body;
-    if (!ownerSeed || !uri) return res.status(400).json({ error: 'ownerSeed and uri are required' });
-    res.json(await mintNft({ ownerSeed, contractAddress, uri, toCoinPublicKey, toShieldedAddress, collection, symbol }));
+    const { ownerSeed, contractAddress, uri, name, toCoinPublicKey, toShieldedAddress, collection, symbol } = req.body;
+    if (!ownerSeed || !uri || !name) return res.status(400).json({ error: 'ownerSeed, uri and name are required' });
+    res.json(await mintNft({ ownerSeed, contractAddress, uri, name, toCoinPublicKey, toShieldedAddress, collection, symbol }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 

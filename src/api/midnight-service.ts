@@ -424,9 +424,9 @@ export async function deployAndMintNft(params: {
   toCoinPublicKey?: string;
   toShieldedAddress?: string;
   uri: string;
+  name: string;
   collection?: string;
   symbol?: string;
-
 }) {
   const cfg = activeNetwork();
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
@@ -471,13 +471,14 @@ export async function deployAndMintNft(params: {
     });
 
     const contractAddress = deployed.deployTxData.public.contractAddress;
-    const mintResult = await deployed.callTx.mint(mintTo, params.uri);
+    const mintResult = await deployed.callTx.mint(mintTo, params.uri, params.name);
 
     return {
       contractAddress,
       tokenId: mintResult.public?.result?.toString() ?? '0',
       owner: resolvedTo || coinPublicKey,
       uri: params.uri,
+      name: params.name,
       collection: params.collection || 'MidnightNFT',
       symbol: params.symbol || 'MNFT',
       network: cfg.networkId,
@@ -501,10 +502,13 @@ export async function queryNftContract(contractAddress: string) {
   const tokens: any[] = [];
   for (const [tokenId, owner] of state.owners) {
     let uri = '';
+    let name = '';
     try { if (state.tokenURIs.member(tokenId)) uri = state.tokenURIs.lookup(tokenId); } catch {}
+    try { if (state.tokenNames?.member(tokenId)) name = state.tokenNames.lookup(tokenId); } catch {}
     tokens.push({
       tokenId: tokenId.toString(),
       owner: Buffer.from(owner.bytes).toString('hex'),
+      name,
       uri,
     });
   }
@@ -736,12 +740,13 @@ export async function mintNft(params: {
   ownerSeed: string;
   contractAddress?: string;  // if null -> create new collection
   uri: string;
+  name: string;
   toCoinPublicKey?: string;
   toShieldedAddress?: string;
   collection?: string;       // only when creating a new collection
   symbol?: string;           // only when creating a new collection
-
 }) {
+  if (!params.name) throw new Error('name is required');
   const cfg = activeNetwork();
 
   // If no contractAddress -> automatically create a new collection
@@ -751,6 +756,7 @@ export async function mintNft(params: {
       toCoinPublicKey: params.toCoinPublicKey,
       toShieldedAddress: params.toShieldedAddress,
       uri: params.uri,
+      name: params.name,
       collection: params.collection || 'MidnightNFT',
       symbol: params.symbol || 'MNFT',
     });
@@ -800,13 +806,14 @@ export async function mintNft(params: {
       initialPrivateState: {},
     });
 
-    const mintResult = await contract.callTx.mint(mintTo, params.uri);
+    const mintResult = await contract.callTx.mint(mintTo, params.uri, params.name);
 
     return {
       contractAddress: params.contractAddress,
       tokenId: mintResult.public?.result?.toString() ?? '?',
       owner: resolvedTo || coinPublicKey,
       uri: params.uri,
+      name: params.name,
       network: cfg.networkId,
       newCollection: false,
     };
