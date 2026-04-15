@@ -28,6 +28,9 @@ import {
   createCollection,
   mintNft,
   transferNft,
+  approveNft,
+  setApprovalForAllNft,
+  burnNft,
 } from './midnight-service.js';
 import { ACTIVE_NETWORK, PUBLIC_API_URL } from './networks.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
@@ -362,6 +365,7 @@ swaggerSpec.paths = {
         seed: { type: 'string', description: 'Optional: seed of the deployer. If empty, a new wallet is generated.' },
         collection: { type: 'string', description: 'Collection name', example: 'NMKRMidnightNFT' },
         symbol: { type: 'string', description: 'Collection symbol', example: 'NMKR' },
+        transferable: { type: 'boolean', default: true, description: 'true (default) = standard NFT (owners can transfer/approve). false = soulbound (only mint and burn).' },
       } } } } },
       responses: {
         200: { description: 'Collection created', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -371,6 +375,7 @@ swaggerSpec.paths = {
           unshieldedAddress: { type: 'string', description: 'Send NIGHT here for fees' },
           collection: { type: 'string' },
           symbol: { type: 'string' },
+          transferable: { type: 'boolean' },
           network: { type: 'string' },
         } } } } },
         500: { description: 'Error' },
@@ -380,7 +385,7 @@ swaggerSpec.paths = {
   '/api/nft/mint': {
     post: {
       tags: ['NFT'], summary: 'Mint NFT in existing collection',
-      description: 'Mints a new NFT in an existing collection. Requires the ownerSeed (from create-collection). If contractAddress is missing, a new collection is created automatically.',
+      description: 'Mints a new NFT in an existing collection. Requires the ownerSeed (from create-collection). If contractAddress is missing, a new collection is created automatically and ownerSeed + contractAddress are returned for further mints.',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'uri', 'name'], properties: {
         ownerSeed: { type: 'string', description: 'Seed of the collection owner (from create-collection)' },
         contractAddress: { type: 'string', description: 'Contract address of the collection. If empty, a new collection is created.' },
@@ -390,6 +395,7 @@ swaggerSpec.paths = {
         toShieldedAddress: { type: 'string', description: 'Optional: shielded address (mn_shield-addr_...) — resolved automatically' },
         collection: { type: 'string', description: 'Only for new collection: name', example: 'MidnightNFT' },
         symbol: { type: 'string', description: 'Only for new collection: symbol', example: 'MNFT' },
+        transferable: { type: 'boolean', default: true, description: 'Only for new collection: true (default) = standard NFT, false = soulbound' },
       } } } } },
       responses: {
         200: { description: 'NFT minted', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -398,6 +404,11 @@ swaggerSpec.paths = {
           owner: { type: 'string' },
           uri: { type: 'string' },
           name: { type: 'string' },
+          collection: { type: 'string', description: 'Only present when newCollection=true' },
+          symbol: { type: 'string', description: 'Only present when newCollection=true' },
+          transferable: { type: 'boolean', description: 'Only present when newCollection=true' },
+          ownerSeed: { type: 'string', description: 'Only present when newCollection=true — needed for further mints' },
+          ownerCoinPublicKey: { type: 'string', description: 'Only present when newCollection=true' },
           network: { type: 'string' },
           newCollection: { type: 'boolean', description: 'true if a new collection was created' },
         } } } } },
@@ -409,9 +420,9 @@ swaggerSpec.paths = {
   '/api/nft/transfer': {
     post: {
       tags: ['NFT'], summary: 'Transfer an NFT to another address',
-      description: 'Transfers an existing NFT to a new owner. Requires the ownerSeed of the current NFT holder, the contractAddress of the collection, and the tokenId of the specific NFT.',
+      description: 'Transfers an NFT. The caller (ownerSeed) must be one of: current owner, single-token approved spender (via /api/nft/approve), or operator (via /api/nft/approve-for-all). Fails for soulbound collections.',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'contractAddress', 'tokenId'], properties: {
-        ownerSeed: { type: 'string', description: 'Seed of the current NFT owner' },
+        ownerSeed: { type: 'string', description: 'Seed of the caller (owner, approved spender, or operator)' },
         contractAddress: { type: 'string', description: 'Contract address of the NFT collection' },
         tokenId: { type: 'string', description: 'Token ID to transfer (e.g. "0", "1")', example: '0' },
         toCoinPublicKey: { type: 'string', description: 'Recipient CoinPublicKey (hex)' },
@@ -421,10 +432,59 @@ swaggerSpec.paths = {
         200: { description: 'NFT transferred', content: { 'application/json': { schema: { type: 'object', properties: {
           contractAddress: { type: 'string' },
           tokenId: { type: 'string' },
-          from: { type: 'string', description: 'CoinPublicKey of previous owner' },
+          from: { type: 'string', description: 'CoinPublicKey of caller' },
           to: { type: 'string', description: 'CoinPublicKey of new owner' },
           network: { type: 'string' },
         } } } } },
+        500: { description: 'Error' },
+      },
+    },
+  },
+  '/api/nft/approve': {
+    post: {
+      tags: ['NFT'], summary: 'Approve a single spender for ONE token',
+      description: 'Authorizes another address to transfer this specific token. The current owner can revoke or change the approval at any time. The approval is automatically cleared after a successful transfer. Fails on soulbound collections.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'contractAddress', 'tokenId'], properties: {
+        ownerSeed: { type: 'string', description: 'Seed of the current NFT owner' },
+        contractAddress: { type: 'string' },
+        tokenId: { type: 'string', example: '0' },
+        toCoinPublicKey: { type: 'string', description: 'Approved spender (hex CoinPublicKey)' },
+        toShieldedAddress: { type: 'string', description: 'Approved spender shielded address — resolved automatically' },
+      } } } } },
+      responses: {
+        200: { description: 'Approval set' },
+        500: { description: 'Error' },
+      },
+    },
+  },
+  '/api/nft/approve-for-all': {
+    post: {
+      tags: ['NFT'], summary: 'Approve / revoke an operator for ALL tokens',
+      description: 'Allows an operator to transfer ANY token in this collection that the caller currently owns or will own in the future. Pass approved=false to revoke. Common pattern for marketplace integrations. Fails on soulbound collections.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'contractAddress', 'approved'], properties: {
+        ownerSeed: { type: 'string', description: 'Seed of the wallet granting/revoking the approval' },
+        contractAddress: { type: 'string' },
+        operatorCoinPublicKey: { type: 'string', description: 'Operator CoinPublicKey (hex)' },
+        operatorShieldedAddress: { type: 'string', description: 'Operator shielded address — resolved automatically' },
+        approved: { type: 'boolean', description: 'true to grant, false to revoke', example: true },
+      } } } } },
+      responses: {
+        200: { description: 'Operator approval updated' },
+        500: { description: 'Error' },
+      },
+    },
+  },
+  '/api/nft/burn': {
+    post: {
+      tags: ['NFT'], summary: 'Burn (destroy) an NFT',
+      description: 'Permanently destroys a token. Only the current owner may call this. Works on both standard and soulbound collections (so users can dispose of unwanted tokens).',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'contractAddress', 'tokenId'], properties: {
+        ownerSeed: { type: 'string', description: 'Seed of the current NFT owner' },
+        contractAddress: { type: 'string' },
+        tokenId: { type: 'string', example: '0' },
+      } } } } },
+      responses: {
+        200: { description: 'NFT burned' },
         500: { description: 'Error' },
       },
     },
@@ -543,17 +603,43 @@ app.get('/api/transaction/:txHash', async (req, res) => {
 
 app.post('/api/nft/create-collection', async (req, res) => {
   try {
-    const { seed, collection, symbol } = req.body;
+    const { seed, collection, symbol, transferable } = req.body;
     if (!collection || !symbol) return res.status(400).json({ error: 'collection and symbol are required' });
-    res.json(await createCollection({ seed, collection, symbol }));
+    res.json(await createCollection({ seed, collection, symbol, transferable }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/nft/mint', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, uri, name, toCoinPublicKey, toShieldedAddress, collection, symbol } = req.body;
+    const { ownerSeed, contractAddress, uri, name, toCoinPublicKey, toShieldedAddress, collection, symbol, transferable } = req.body;
     if (!ownerSeed || !uri || !name) return res.status(400).json({ error: 'ownerSeed, uri and name are required' });
-    res.json(await mintNft({ ownerSeed, contractAddress, uri, name, toCoinPublicKey, toShieldedAddress, collection, symbol }));
+    res.json(await mintNft({ ownerSeed, contractAddress, uri, name, toCoinPublicKey, toShieldedAddress, collection, symbol, transferable }));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/nft/approve', async (req, res) => {
+  try {
+    const { ownerSeed, contractAddress, tokenId, toCoinPublicKey, toShieldedAddress } = req.body;
+    if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
+    if (!toCoinPublicKey && !toShieldedAddress) return res.status(400).json({ error: 'Either toCoinPublicKey or toShieldedAddress is required' });
+    res.json(await approveNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress }));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/nft/approve-for-all', async (req, res) => {
+  try {
+    const { ownerSeed, contractAddress, operatorCoinPublicKey, operatorShieldedAddress, approved } = req.body;
+    if (!ownerSeed || !contractAddress || approved === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and approved are required' });
+    if (!operatorCoinPublicKey && !operatorShieldedAddress) return res.status(400).json({ error: 'Either operatorCoinPublicKey or operatorShieldedAddress is required' });
+    res.json(await setApprovalForAllNft({ ownerSeed, contractAddress, operatorCoinPublicKey, operatorShieldedAddress, approved: Boolean(approved) }));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/nft/burn', async (req, res) => {
+  try {
+    const { ownerSeed, contractAddress, tokenId } = req.body;
+    if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
+    res.json(await burnNft({ ownerSeed, contractAddress, tokenId: String(tokenId) }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 

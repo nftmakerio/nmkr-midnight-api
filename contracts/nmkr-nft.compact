@@ -1,83 +1,185 @@
 pragma language_version >= 0.21.0;
 
+// =============================================================
+// NMKR Midnight NFT Contract
+// =============================================================
+//
+// Hybrid NFT contract inspired by ERC-721 and the OpenZeppelin
+// NonFungibleToken Compact module. Supports:
+//
+//   - Mint (only the contract owner can create new tokens)
+//   - Transfer (subject to per-collection 'transferable' flag)
+//   - Approve / setApprovalForAll (allow others to transfer your tokens)
+//   - Burn (any owner can destroy their token)
+//   - Per-collection transferable flag (set once at deploy time)
+//     - true  -> standard NFT (owner can transfer/approve)
+//     - false -> soulbound (only mint and burn, no transfer/approve)
+//
+// On-chain state (see ledger declarations below):
+//   collectionName, collectionSymbol, contractOwner, transferable
+//     -> sealed: set once in the constructor and immutable forever
+//   nextTokenId      -> counter for the next mint
+//   owners           -> tokenId -> current owner public key
+//   tokenURIs        -> tokenId -> metadata URI
+//   tokenNames       -> tokenId -> human readable name
+//   balanceMap       -> owner -> number of tokens owned in this collection
+//   tokenApprovals   -> tokenId -> single approved spender
+//   operatorApprovals-> owner -> operator -> bool (approve/revoke for ALL tokens)
+//
+// Notes:
+//   - Owners are represented by their ZswapCoinPublicKey (shielded identity).
+//     This means a NFT belongs to a wallet's shielded coin key, NOT to its
+//     unshielded address. The unshielded address is only used for paying
+//     transaction fees (DUST/NIGHT).
+//   - There are no transfer/approval events — Compact does not yet support
+//     event emission. Callers must read the contract state to detect changes.
+// =============================================================
+
 import CompactStandardLibrary;
 
 export { ZswapCoinPublicKey, ContractAddress };
 
-// ---- Ledger State ----
+// =============================================================
+// Ledger State (on-chain)
+// =============================================================
 
+// Collection-level metadata. 'sealed' means: written once in the constructor
+// and immutable for the lifetime of the contract.
 export sealed ledger collectionName: Opaque<"string">;
 export sealed ledger collectionSymbol: Opaque<"string">;
+
+// The wallet that deployed the contract. Only this key may call mint().
 export ledger contractOwner: ZswapCoinPublicKey;
+
+// Per-collection switch:
+//   true  -> standard NFT collection — owners can transfer and approve
+//   false -> soulbound collection — only mint and burn are allowed
+// Decided once at deploy time; cannot be changed afterwards.
+export sealed ledger transferable: Boolean;
+
+// Auto-incrementing token id. Stored as a Counter so we can use .read()
+// and .increment(1) directly inside circuits.
 export ledger nextTokenId: Counter;
+
+// Core ownership tables.
 export ledger owners: Map<Uint<128>, ZswapCoinPublicKey>;
 export ledger tokenURIs: Map<Uint<128>, Opaque<"string">>;
 export ledger tokenNames: Map<Uint<128>, Opaque<"string">>;
 export ledger balanceMap: Map<ZswapCoinPublicKey, Counter>;
 
-// ---- Constructor ----
+// Approval tables (only used when transferable == true).
+//
+// tokenApprovals: a single account may be approved to transfer ONE specific
+// token. The approval is automatically cleared after a transfer or burn.
+export ledger tokenApprovals: Map<Uint<128>, ZswapCoinPublicKey>;
 
+// operatorApprovals: an "operator" may transfer ALL of an owner's tokens in
+// this collection. Useful for marketplace-style integrations where the owner
+// only has to approve once.
+export ledger operatorApprovals: Map<ZswapCoinPublicKey, Map<ZswapCoinPublicKey, Boolean>>;
+
+// =============================================================
+// Constructor
+// =============================================================
+//
+// Called exactly once when the contract is deployed.
+//   _name, _symbol  -> human readable collection metadata
+//   _owner          -> the shielded coin public key that owns the contract
+//                      (only this key may mint new tokens)
+//   _transferable   -> true  = standard NFT collection
+//                      false = soulbound (no transfer/approve allowed)
 constructor(
   _name: Opaque<"string">,
   _symbol: Opaque<"string">,
-  _owner: ZswapCoinPublicKey
+  _owner: ZswapCoinPublicKey,
+  _transferable: Boolean
 ) {
   collectionName = disclose(_name);
   collectionSymbol = disclose(_symbol);
   contractOwner = disclose(_owner);
+  transferable = disclose(_transferable);
 }
 
-// ---- Read-Only Circuits ----
+// =============================================================
+// Read-only Circuits
+// =============================================================
 
+// Returns the collection name (e.g. "NMKRDemoCollection").
 export circuit name(): Opaque<"string"> {
   return collectionName;
 }
 
+// Returns the collection symbol (e.g. "NMKRD").
 export circuit symbol(): Opaque<"string"> {
   return collectionSymbol;
 }
 
+// Returns the current owner of a given token.
+// Reverts if the token does not exist.
 export circuit ownerOf(tokenId: Uint<128>): ZswapCoinPublicKey {
   const d_tokenId = disclose(tokenId);
   assert(owners.member(d_tokenId), "Token does not exist");
   return owners.lookup(d_tokenId);
 }
 
+// Returns the metadata URI (e.g. ipfs://...) for a token.
 export circuit tokenURI(tokenId: Uint<128>): Opaque<"string"> {
   const d_tokenId = disclose(tokenId);
   assert(tokenURIs.member(d_tokenId), "Token does not exist");
   return tokenURIs.lookup(d_tokenId);
 }
 
+// Returns the human readable name stored on-chain for the token.
 export circuit tokenName(tokenId: Uint<128>): Opaque<"string"> {
   const d_tokenId = disclose(tokenId);
   assert(tokenNames.member(d_tokenId), "Token does not exist");
   return tokenNames.lookup(d_tokenId);
 }
 
+// Returns the highest minted token id + 1, i.e. the total number of mints.
+// Note: burned tokens are NOT subtracted — this counts all tokens that were
+// ever minted.
 export circuit totalSupply(): Uint<64> {
   return nextTokenId.read();
 }
 
-// ---- Mint (nur Contract-Owner) ----
+// Returns the single approved spender for a token (or the contract owner
+// fallback if none is set). Reverts if the token does not exist.
+export circuit getApproved(tokenId: Uint<128>): ZswapCoinPublicKey {
+  const d_tokenId = disclose(tokenId);
+  assert(owners.member(d_tokenId), "Token does not exist");
+  assert(tokenApprovals.member(d_tokenId), "No approval set");
+  return tokenApprovals.lookup(d_tokenId);
+}
 
+// =============================================================
+// Mint  — only the contract owner may call this
+// =============================================================
+//
+// Mints a brand new token with the given URI and name and assigns it to `to`.
+// Returns the new token id (starts at 0 for the first mint).
+//
+// Auth: only the wallet whose public key matches `contractOwner` may mint.
+// This is enforced by comparing ownPublicKey() (the caller) with contractOwner.
 export circuit mint(
   to: ZswapCoinPublicKey,
   uri: Opaque<"string">,
-  name: Opaque<"string">
+  tokenName: Opaque<"string">
 ): Uint<64> {
   assert(ownPublicKey() == contractOwner, "Only the contract owner can mint");
 
   const d_to = disclose(to);
   const d_uri = disclose(uri);
-  const d_name = disclose(name);
+  const d_name = disclose(tokenName);
   const tokenId = nextTokenId.read();
   const tokenIdKey = tokenId as Uint<128>;
 
+  // Record ownership and metadata
   owners.insert(tokenIdKey, d_to);
   tokenURIs.insert(tokenIdKey, d_uri);
   tokenNames.insert(tokenIdKey, d_name);
 
+  // Increment the recipient's token count
   if (balanceMap.member(d_to)) {
     balanceMap.lookup(d_to).increment(1);
   } else {
@@ -89,28 +191,163 @@ export circuit mint(
   return tokenId;
 }
 
-// ---- Transfer ----
-
+// =============================================================
+// Transfer  — owner OR approved spender OR operator
+// =============================================================
+//
+// Transfers `tokenId` from its current owner to `to`. Allowed only when:
+//   - the collection was deployed with transferable = true, AND
+//   - the caller is one of:
+//       * the current owner, OR
+//       * the address approved for THIS token via approve(), OR
+//       * an operator approved by the owner via setApprovalForAll().
+//
+// After a successful transfer, any single-token approval is cleared so the
+// new owner is not bound by the old owner's approvals.
 export circuit transfer(
   to: ZswapCoinPublicKey,
   tokenId: Uint<128>
 ): [] {
+  // Soulbound collections do not allow any transfers.
+  assert(transferable, "This collection is non-transferable (soulbound)");
+
   const d_to = disclose(to);
   const d_tokenId = disclose(tokenId);
 
   assert(owners.member(d_tokenId), "Token does not exist");
 
   const currentOwner = owners.lookup(d_tokenId);
-  assert(ownPublicKey() == currentOwner, "Only the owner can transfer");
+  const caller = ownPublicKey();
 
+  // Authorization: caller must be owner, single-token approver or operator.
+  const isOwner = caller == currentOwner;
+  const isApproved =
+    tokenApprovals.member(d_tokenId) && tokenApprovals.lookup(d_tokenId) == caller;
+  const isOperator =
+    operatorApprovals.member(currentOwner) &&
+    operatorApprovals.lookup(currentOwner).member(caller) &&
+    operatorApprovals.lookup(currentOwner).lookup(caller);
+
+  assert(isOwner || isApproved || isOperator, "Caller is not authorized to transfer");
+
+  // Update ownership
   owners.insert(d_tokenId, d_to);
 
+  // Adjust balances: -1 for sender, +1 for receiver
   balanceMap.lookup(currentOwner).decrement(1);
-
   if (balanceMap.member(d_to)) {
     balanceMap.lookup(d_to).increment(1);
   } else {
     balanceMap.insertDefault(d_to);
     balanceMap.lookup(d_to).increment(1);
+  }
+
+  // Clear any single-token approval — the new owner is not bound by it.
+  if (tokenApprovals.member(d_tokenId)) {
+    tokenApprovals.remove(d_tokenId);
+  }
+}
+
+// =============================================================
+// Approve a single spender for ONE token
+// =============================================================
+//
+// Lets `to` transfer `tokenId` once on the owner's behalf. Useful for
+// marketplaces: list a token, the marketplace contract / address transfers it
+// to the buyer once a sale completes.
+//
+// Only the current owner of the token may call this.
+// Soulbound collections (transferable = false) do NOT support approvals.
+export circuit approve(
+  to: ZswapCoinPublicKey,
+  tokenId: Uint<128>
+): [] {
+  assert(transferable, "This collection is non-transferable (soulbound)");
+
+  const d_to = disclose(to);
+  const d_tokenId = disclose(tokenId);
+
+  assert(owners.member(d_tokenId), "Token does not exist");
+  const currentOwner = owners.lookup(d_tokenId);
+  assert(ownPublicKey() == currentOwner, "Only the owner can approve");
+
+  tokenApprovals.insert(d_tokenId, d_to);
+}
+
+// =============================================================
+// Approve / revoke an operator for ALL of the caller's tokens
+// =============================================================
+//
+// Lets `operator` transfer ANY token in this collection that the caller
+// currently owns or will own in the future. Pass approved = false to
+// revoke a previously granted operator approval.
+//
+// Soulbound collections do NOT support operator approvals.
+export circuit setApprovalForAll(
+  operator: ZswapCoinPublicKey,
+  approved: Boolean
+): [] {
+  assert(transferable, "This collection is non-transferable (soulbound)");
+
+  const d_operator = disclose(operator);
+  const d_approved = disclose(approved);
+  const owner = ownPublicKey();
+
+  // Lazily create the inner map if this is the first operator approval.
+  if (!operatorApprovals.member(owner)) {
+    operatorApprovals.insertDefault(owner);
+  }
+  operatorApprovals.lookup(owner).insert(d_operator, d_approved);
+}
+
+// Reads whether `operator` is currently approved for all of `owner`'s tokens.
+export circuit isApprovedForAll(
+  owner: ZswapCoinPublicKey,
+  operator: ZswapCoinPublicKey
+): Boolean {
+  const d_owner = disclose(owner);
+  const d_operator = disclose(operator);
+
+  if (!operatorApprovals.member(d_owner)) {
+    return false;
+  }
+  if (!operatorApprovals.lookup(d_owner).member(d_operator)) {
+    return false;
+  }
+  return operatorApprovals.lookup(d_owner).lookup(d_operator);
+}
+
+// =============================================================
+// Burn — destroy a token forever
+// =============================================================
+//
+// Removes the token from the collection. Allowed for the current owner,
+// even on soulbound collections (so users can still get rid of unwanted
+// tokens, e.g. consumed tickets or expired badges).
+//
+// All token-specific state is cleared: ownership, URI, name, approval.
+// The recipient's balance is decremented. The contract's totalSupply
+// counter is NOT decremented (it tracks total mints, not current supply).
+export circuit burn(tokenId: Uint<128>): [] {
+  const d_tokenId = disclose(tokenId);
+
+  assert(owners.member(d_tokenId), "Token does not exist");
+
+  const currentOwner = owners.lookup(d_tokenId);
+  assert(ownPublicKey() == currentOwner, "Only the owner can burn");
+
+  // Decrement the owner's balance
+  balanceMap.lookup(currentOwner).decrement(1);
+
+  // Wipe all token-specific state
+  owners.remove(d_tokenId);
+  if (tokenURIs.member(d_tokenId)) {
+    tokenURIs.remove(d_tokenId);
+  }
+  if (tokenNames.member(d_tokenId)) {
+    tokenNames.remove(d_tokenId);
+  }
+  if (tokenApprovals.member(d_tokenId)) {
+    tokenApprovals.remove(d_tokenId);
   }
 }

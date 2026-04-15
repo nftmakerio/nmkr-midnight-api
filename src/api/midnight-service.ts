@@ -448,9 +448,11 @@ export async function deployAndMintNft(params: {
   name: string;
   collection?: string;
   symbol?: string;
+  transferable?: boolean;  // default: true
 }) {
   const cfg = activeNetwork();
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
+  const transferable = params.transferable !== false;
 
   const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
   const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
@@ -488,7 +490,7 @@ export async function deployAndMintNft(params: {
       compiledContract,
       privateStateId: 'nftPrivateState',
       initialPrivateState: {},
-      args: [params.collection || 'MidnightNFT', params.symbol || 'MNFT', ownerPubKey],
+      args: [params.collection || 'MidnightNFT', params.symbol || 'MNFT', ownerPubKey, transferable],
     });
 
     const contractAddress = deployed.deployTxData.public.contractAddress;
@@ -502,6 +504,9 @@ export async function deployAndMintNft(params: {
       name: params.name,
       collection: params.collection || 'MidnightNFT',
       symbol: params.symbol || 'MNFT',
+      transferable,
+      ownerSeed: params.seed,
+      ownerCoinPublicKey: coinPublicKey,
       network: cfg.networkId,
     };
   } finally {
@@ -539,6 +544,7 @@ export async function queryNftContract(contractAddress: string) {
     collectionName: state.collectionName,
     collectionSymbol: state.collectionSymbol,
     contractOwner: Buffer.from(state.contractOwner.bytes).toString('hex'),
+    transferable: state.transferable === true,
     totalSupply: Number(state.nextTokenId),
     tokens,
     network: cfg.networkId,
@@ -700,9 +706,10 @@ export async function createCollection(params: {
   seed?: string;       // Optional: if null, a new wallet is generated
   collection: string;
   symbol: string;
-
+  transferable?: boolean;  // default: true
 }) {
   const cfg = activeNetwork();
+  const transferable = params.transferable !== false;
 
   // Generate seed or use existing one
   const seed = params.seed || Buffer.from(generateRandomSeed()).toString('hex');
@@ -740,7 +747,7 @@ export async function createCollection(params: {
       compiledContract,
       privateStateId: 'nftPrivateState',
       initialPrivateState: {},
-      args: [params.collection, params.symbol, ownerPubKey],
+      args: [params.collection, params.symbol, ownerPubKey, transferable],
     });
 
     return {
@@ -766,6 +773,7 @@ export async function mintNft(params: {
   toShieldedAddress?: string;
   collection?: string;       // only when creating a new collection
   symbol?: string;           // only when creating a new collection
+  transferable?: boolean;    // only when creating a new collection (default true)
 }) {
   if (!params.name) throw new Error('name is required');
   const cfg = activeNetwork();
@@ -780,6 +788,7 @@ export async function mintNft(params: {
       name: params.name,
       collection: params.collection || 'MidnightNFT',
       symbol: params.symbol || 'MNFT',
+      transferable: params.transferable,
     });
     return { ...result, newCollection: true };
   }
@@ -906,6 +915,132 @@ export async function transferNft(params: {
   } finally {
     if (!cached) await ctx.facade.stop();
   }
+}
+
+// ================================================================
+// Approve / Burn helpers
+// ================================================================
+
+// Internal helper: connect to a deployed contract, then call a circuit on it.
+// Returns whatever the circuit returned via mintResult.public.result.
+async function callContract<T>(
+  ownerSeed: string,
+  contractAddress: string,
+  fn: (contract: any) => Promise<T>,
+): Promise<{ result: T; coinPublicKey: string }> {
+  const cfg = activeNetwork();
+  const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
+  const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
+    CompiledContract.withVacantWitnesses,
+    CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
+  );
+
+  const { ctx, cached } = await getWalletCtx(ownerSeed);
+  try {
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
+    const coinPublicKey = state.shielded.coinPublicKey.toHexString();
+
+    const bridge = await createProviderBridge(ctx);
+    const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
+    const { findDeployedContract } = await import('@midnight-ntwrk/midnight-js-contracts');
+    const providers = {
+      privateStateProvider: levelPrivateStateProvider({
+        privateStateStoreName: `nft-call-${Date.now()}`,
+        walletProvider: bridge,
+        privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
+        accountId: coinPublicKey.substring(0, 32),
+      }),
+      publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
+      zkConfigProvider,
+      proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
+      walletProvider: bridge,
+      midnightProvider: bridge,
+    };
+
+    const contract = await findDeployedContract(providers, {
+      compiledContract,
+      contractAddress,
+      privateStateId: 'nftPrivateState',
+      initialPrivateState: {},
+    });
+
+    const result = await fn(contract);
+    return { result, coinPublicKey };
+  } finally {
+    if (!cached) await ctx.facade.stop();
+  }
+}
+
+// Approve a single spender for ONE specific token. Subsequent transfer() by
+// the approved spender is allowed even though they don't own the token.
+export async function approveNft(params: {
+  ownerSeed: string;
+  contractAddress: string;
+  tokenId: string;
+  toCoinPublicKey?: string;
+  toShieldedAddress?: string;
+}) {
+  const cfg = activeNetwork();
+  const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
+  if (!resolvedTo) throw new Error('Either toCoinPublicKey or toShieldedAddress is required');
+
+  const { coinPublicKey } = await callContract(params.ownerSeed, params.contractAddress, async (contract) => {
+    const approveTo = { bytes: Buffer.from(resolvedTo, 'hex') };
+    return contract.callTx.approve(approveTo, BigInt(params.tokenId));
+  });
+
+  return {
+    contractAddress: params.contractAddress,
+    tokenId: params.tokenId,
+    owner: coinPublicKey,
+    approved: resolvedTo,
+    network: cfg.networkId,
+  };
+}
+
+// Approve / revoke an operator for ALL tokens of the caller in this collection.
+export async function setApprovalForAllNft(params: {
+  ownerSeed: string;
+  contractAddress: string;
+  operatorCoinPublicKey?: string;
+  operatorShieldedAddress?: string;
+  approved: boolean;
+}) {
+  const cfg = activeNetwork();
+  const resolvedOperator = resolveToCoinPublicKey(params.operatorCoinPublicKey, params.operatorShieldedAddress);
+  if (!resolvedOperator) throw new Error('Either operatorCoinPublicKey or operatorShieldedAddress is required');
+
+  const { coinPublicKey } = await callContract(params.ownerSeed, params.contractAddress, async (contract) => {
+    const operator = { bytes: Buffer.from(resolvedOperator, 'hex') };
+    return contract.callTx.setApprovalForAll(operator, params.approved);
+  });
+
+  return {
+    contractAddress: params.contractAddress,
+    owner: coinPublicKey,
+    operator: resolvedOperator,
+    approved: params.approved,
+    network: cfg.networkId,
+  };
+}
+
+// Destroy a token. Only the current owner may call this.
+export async function burnNft(params: {
+  ownerSeed: string;
+  contractAddress: string;
+  tokenId: string;
+}) {
+  const cfg = activeNetwork();
+  const { coinPublicKey } = await callContract(params.ownerSeed, params.contractAddress, async (contract) => {
+    return contract.callTx.burn(BigInt(params.tokenId));
+  });
+
+  return {
+    contractAddress: params.contractAddress,
+    tokenId: params.tokenId,
+    burnedBy: coinPublicKey,
+    network: cfg.networkId,
+  };
 }
 
 // ---- Provider Bridge (internal) ----
