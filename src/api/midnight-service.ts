@@ -302,15 +302,21 @@ export async function getBalanceBySeed(seed: string) {
   });
 }
 
+export interface NightRecipient {
+  toAddress: string;
+  amount: string | number | bigint;  // raw units (1 NIGHT = 1_000_000 raw)
+}
+
 export async function transferNight(params: {
   senderSeed: string;
-  toAddress: string;
-  amount: number;
+  recipients: NightRecipient[];
   dustSeed?: string;
-
 }) {
   const cfg = activeNetwork();
-  const amountRaw = BigInt(Math.round(params.amount * 1_000_000));
+
+  if (!Array.isArray(params.recipients) || params.recipients.length === 0) {
+    throw new Error('At least one recipient is required');
+  }
 
   const { ctx: sender, cached: senderCached } = await getWalletCtx(params.senderSeed);
   let dustSecretKey = sender.dustSecretKey;
@@ -325,12 +331,17 @@ export async function transferNight(params: {
       dustCached = dust.cached;
     }
 
-    const parsedAddr = MidnightBech32m.parse(params.toAddress);
-    const receiverAddress = parsedAddr.decode(UnshieldedAddress, getNetworkId());
+    const outputs = params.recipients.map(r => {
+      const parsedAddr = MidnightBech32m.parse(r.toAddress);
+      const receiverAddress = parsedAddr.decode(UnshieldedAddress, getNetworkId());
+      const amountRaw = BigInt(r.amount);
+      if (amountRaw <= 0n) throw new Error(`Invalid amount for ${r.toAddress}: must be > 0`);
+      return { type: unshieldedToken().raw, amount: amountRaw, receiverAddress };
+    });
 
     const tokenTransfer = [{
       type: 'unshielded' as const,
-      outputs: [{ type: unshieldedToken().raw, amount: amountRaw, receiverAddress }],
+      outputs,
     }];
 
     const ttl = new Date(Date.now() + 30 * 60 * 1000);
@@ -345,7 +356,20 @@ export async function transferNight(params: {
     const finalizedTx = await sender.facade.finalizeTransaction(signedRecipe.transaction);
     const txHash = await sender.facade.submitTransaction(finalizedTx);
 
-    return { txHash, amount: params.amount, amountRaw: amountRaw.toString(), to: params.toAddress, network: cfg.networkId };
+    const recipientsOut = params.recipients.map(r => ({
+      toAddress: r.toAddress,
+      amount: BigInt(r.amount).toString(),
+      amountNight: Number(BigInt(r.amount)) / 1_000_000,
+    }));
+    const totalRaw = recipientsOut.reduce((s, r) => s + BigInt(r.amount), 0n);
+
+    return {
+      txHash,
+      recipients: recipientsOut,
+      totalRaw: totalRaw.toString(),
+      totalNight: Number(totalRaw) / 1_000_000,
+      network: cfg.networkId,
+    };
   } finally {
     if (!senderCached) await sender.facade.stop();
     if (dustCtx && !dustCached) await dustCtx.facade.stop();

@@ -226,15 +226,43 @@ swaggerSpec.paths = {
   },
   '/api/transfer/night': {
     post: {
-      tags: ['Transfer'], summary: 'Transfer NIGHT tokens',
-      description: 'Sends NIGHT from a wallet to an unshielded address. Optional separate Dust provider.',
-      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['senderSeed', 'toAddress', 'amount'], properties: {
+      tags: ['Transfer'], summary: 'Transfer NIGHT tokens (multi-recipient)',
+      description: 'Sends NIGHT from a wallet to one or more unshielded addresses in a single transaction. Amounts are in raw units (1 NIGHT = 1,000,000 raw). Optional separate Dust provider for fees.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['senderSeed', 'recipients'], properties: {
         senderSeed: { type: 'string', description: 'Seed of the sender' },
-        toAddress: { type: 'string', description: 'Recipient mn_addr_...', example: 'mn_addr_preprod1fx3m83tputlrjrl7j94h4mxmxpevg0542d98w4ssq4canfqrvt7swmc7a9' },
-        amount: { type: 'number', description: 'Amount in NIGHT', example: 5 },
-        dustSeed: { type: 'string', description: 'Optional: seed of the Dust provider' },
+        recipients: {
+          type: 'array',
+          description: 'List of recipients with amounts (in raw units, 1 NIGHT = 1_000_000)',
+          minItems: 1,
+          items: {
+            type: 'object',
+            required: ['toAddress', 'amount'],
+            properties: {
+              toAddress: { type: 'string', description: 'Recipient mn_addr_...', example: 'mn_addr_preprod1fx3m83tputlrjrl7j94h4mxmxpevg0542d98w4ssq4canfqrvt7swmc7a9' },
+              amount: { type: 'string', description: 'Amount in raw units (bigint as string)', example: '5000000' },
+            },
+          },
+          example: [
+            { toAddress: 'mn_addr_preprod1fx3m83tputlrjrl7j94h4mxmxpevg0542d98w4ssq4canfqrvt7swmc7a9', amount: '5000000' },
+          ],
+        },
+        dustSeed: { type: 'string', description: 'Optional: seed of the Dust provider (pays fees)' },
       } } } } },
-      responses: { 200: { description: 'Transfer successful' }, 500: { description: 'Error' } },
+      responses: {
+        200: { description: 'Transfer successful', content: { 'application/json': { schema: { type: 'object', properties: {
+          txHash: { type: 'string' },
+          recipients: { type: 'array', items: { type: 'object', properties: {
+            toAddress: { type: 'string' },
+            amount: { type: 'string', description: 'Raw amount sent' },
+            amountNight: { type: 'number', description: 'Amount in NIGHT' },
+          } } },
+          totalRaw: { type: 'string' },
+          totalNight: { type: 'number' },
+          network: { type: 'string' },
+        } } } } },
+        400: { description: 'Invalid request' },
+        500: { description: 'Error' },
+      },
     },
   },
   '/api/wallet/transactions': {
@@ -482,9 +510,17 @@ app.post('/api/wallet/register-dust', async (req, res) => {
 
 app.post('/api/transfer/night', async (req, res) => {
   try {
-    const { senderSeed, toAddress, amount, dustSeed } = req.body;
-    if (!senderSeed || !toAddress || !amount) return res.status(400).json({ error: 'senderSeed, toAddress and amount are required' });
-    res.json(await transferNight({ senderSeed, toAddress, amount, dustSeed }));
+    const { senderSeed, recipients, dustSeed } = req.body;
+    if (!senderSeed) return res.status(400).json({ error: 'senderSeed is required' });
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({ error: 'recipients must be a non-empty array of { toAddress, amount }' });
+    }
+    for (const r of recipients) {
+      if (!r.toAddress || r.amount === undefined || r.amount === null) {
+        return res.status(400).json({ error: 'each recipient requires toAddress and amount' });
+      }
+    }
+    res.json(await transferNight({ senderSeed, recipients, dustSeed }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
