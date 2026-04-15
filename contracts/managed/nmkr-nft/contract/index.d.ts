@@ -13,12 +13,16 @@ export type ImpureCircuits<PS> = {
   ownerOf(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
   tokenURI(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
   tokenName(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
+  tokenImage(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
+  tokenMediaType(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
   totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
   getApproved(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
   mint(context: __compactRuntime.CircuitContext<PS>,
        to_0: ZswapCoinPublicKey,
        uri_0: string,
-       tokenName_0: string): __compactRuntime.CircuitResults<PS, bigint>;
+       tokenName_0: string,
+       image_0: string,
+       mediaType_0: string): __compactRuntime.CircuitResults<PS, bigint>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            to_0: ZswapCoinPublicKey,
            tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
@@ -40,12 +44,16 @@ export type ProvableCircuits<PS> = {
   ownerOf(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
   tokenURI(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
   tokenName(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
+  tokenImage(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
+  tokenMediaType(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
   totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
   getApproved(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
   mint(context: __compactRuntime.CircuitContext<PS>,
        to_0: ZswapCoinPublicKey,
        uri_0: string,
-       tokenName_0: string): __compactRuntime.CircuitResults<PS, bigint>;
+       tokenName_0: string,
+       image_0: string,
+       mediaType_0: string): __compactRuntime.CircuitResults<PS, bigint>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            to_0: ZswapCoinPublicKey,
            tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
@@ -70,12 +78,16 @@ export type Circuits<PS> = {
   ownerOf(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
   tokenURI(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
   tokenName(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
+  tokenImage(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
+  tokenMediaType(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
   totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
   getApproved(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
   mint(context: __compactRuntime.CircuitContext<PS>,
        to_0: ZswapCoinPublicKey,
        uri_0: string,
-       tokenName_0: string): __compactRuntime.CircuitResults<PS, bigint>;
+       tokenName_0: string,
+       image_0: string,
+       mediaType_0: string): __compactRuntime.CircuitResults<PS, bigint>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            to_0: ZswapCoinPublicKey,
            tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
@@ -94,6 +106,8 @@ export type Circuits<PS> = {
 export type Ledger = {
   readonly collectionName: string;
   readonly collectionSymbol: string;
+  readonly collectionImage: string;
+  readonly collectionMediaType: string;
   readonly contractOwner: ZswapCoinPublicKey;
   readonly transferable: boolean;
   readonly nextTokenId: bigint;
@@ -112,6 +126,20 @@ export type Ledger = {
     [Symbol.iterator](): Iterator<[bigint, string]>
   };
   tokenNames: {
+    isEmpty(): boolean;
+    size(): bigint;
+    member(key_0: bigint): boolean;
+    lookup(key_0: bigint): string;
+    [Symbol.iterator](): Iterator<[bigint, string]>
+  };
+  tokenImages: {
+    isEmpty(): boolean;
+    size(): bigint;
+    member(key_0: bigint): boolean;
+    lookup(key_0: bigint): string;
+    [Symbol.iterator](): Iterator<[bigint, string]>
+  };
+  tokenMediaTypes: {
     isEmpty(): boolean;
     size(): bigint;
     member(key_0: bigint): boolean;
@@ -159,7 +187,9 @@ export declare class Contract<PS = any, W extends Witnesses<PS> = Witnesses<PS>>
                _name_1: string,
                _symbol_1: string,
                _owner_0: ZswapCoinPublicKey,
-               _transferable_0: boolean): __compactRuntime.ConstructorResult<PS>;
+               _transferable_0: boolean,
+               _image_0: string,
+               _mediaType_0: string): __compactRuntime.ConstructorResult<PS>;
 }
 
 export declare function ledger(state: __compactRuntime.StateValue | __compactRuntime.ChargedState): Ledger;

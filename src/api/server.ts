@@ -363,9 +363,11 @@ swaggerSpec.paths = {
       description: 'Deploys a new NFT contract. If no seed is provided, a new wallet is generated. Returns the ownerSeed — **keep this safe**, it is required for minting!',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['collection', 'symbol'], properties: {
         seed: { type: 'string', description: 'Optional: seed of the deployer. If empty, a new wallet is generated.' },
-        collection: { type: 'string', description: 'Collection name', example: 'NMKRMidnightNFT' },
-        symbol: { type: 'string', description: 'Collection symbol', example: 'NMKR' },
+        collection: { type: 'string', description: 'Collection name (max 64 chars)', example: 'NMKRMidnightNFT' },
+        symbol: { type: 'string', description: 'Collection symbol (max 32 chars)', example: 'NMKR' },
         transferable: { type: 'boolean', default: true, description: 'true (default) = standard NFT (owners can transfer/approve). false = soulbound (only mint and burn).' },
+        image: { type: 'string', description: 'Optional collection-level image URI (max 128 chars), e.g. ipfs://...' },
+        mediaType: { type: 'string', description: 'Optional MIME type (max 64 chars), e.g. image/png' },
       } } } } },
       responses: {
         200: { description: 'Collection created', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -376,8 +378,11 @@ swaggerSpec.paths = {
           collection: { type: 'string' },
           symbol: { type: 'string' },
           transferable: { type: 'boolean' },
+          image: { type: 'string' },
+          mediaType: { type: 'string' },
           network: { type: 'string' },
         } } } } },
+        400: { description: 'Validation error (e.g. field too long)' },
         500: { description: 'Error' },
       },
     },
@@ -389,13 +394,17 @@ swaggerSpec.paths = {
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'uri', 'name'], properties: {
         ownerSeed: { type: 'string', description: 'Seed of the collection owner (from create-collection)' },
         contractAddress: { type: 'string', description: 'Contract address of the collection. If empty, a new collection is created.' },
-        uri: { type: 'string', description: 'Metadata URI (JSON)', example: 'ipfs://example/token-1.json' },
-        name: { type: 'string', description: 'NFT name (required, stored on-chain)', example: 'My First NFT' },
+        uri: { type: 'string', description: 'Metadata URI (max 128 chars)', example: 'ipfs://example/token-1.json' },
+        name: { type: 'string', description: 'NFT name (required, max 64 chars)', example: 'My First NFT' },
+        image: { type: 'string', description: 'Optional per-token image URI (max 128 chars)', example: 'ipfs://example/image.png' },
+        mediaType: { type: 'string', description: 'Optional MIME type (max 64 chars)', example: 'image/png' },
         toCoinPublicKey: { type: 'string', description: 'Optional: recipient CoinPublicKey (hex)' },
         toShieldedAddress: { type: 'string', description: 'Optional: shielded address (mn_shield-addr_...) — resolved automatically' },
-        collection: { type: 'string', description: 'Only for new collection: name', example: 'MidnightNFT' },
-        symbol: { type: 'string', description: 'Only for new collection: symbol', example: 'MNFT' },
+        collection: { type: 'string', description: 'Only for new collection: name (max 64 chars)', example: 'MidnightNFT' },
+        symbol: { type: 'string', description: 'Only for new collection: symbol (max 32 chars)', example: 'MNFT' },
         transferable: { type: 'boolean', default: true, description: 'Only for new collection: true (default) = standard NFT, false = soulbound' },
+        collectionImage: { type: 'string', description: 'Only for new collection: collection-level image URI (max 128 chars)' },
+        collectionMediaType: { type: 'string', description: 'Only for new collection: MIME type (max 64 chars)' },
       } } } } },
       responses: {
         200: { description: 'NFT minted', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -404,15 +413,19 @@ swaggerSpec.paths = {
           owner: { type: 'string' },
           uri: { type: 'string' },
           name: { type: 'string' },
+          image: { type: 'string' },
+          mediaType: { type: 'string' },
           collection: { type: 'string', description: 'Only present when newCollection=true' },
           symbol: { type: 'string', description: 'Only present when newCollection=true' },
           transferable: { type: 'boolean', description: 'Only present when newCollection=true' },
+          collectionImage: { type: 'string', description: 'Only present when newCollection=true' },
+          collectionMediaType: { type: 'string', description: 'Only present when newCollection=true' },
           ownerSeed: { type: 'string', description: 'Only present when newCollection=true — needed for further mints' },
           ownerCoinPublicKey: { type: 'string', description: 'Only present when newCollection=true' },
           network: { type: 'string' },
           newCollection: { type: 'boolean', description: 'true if a new collection was created' },
         } } } } },
-        400: { description: 'Missing required fields' },
+        400: { description: 'Missing required fields or validation error' },
         500: { description: 'Error' },
       },
     },
@@ -603,18 +616,32 @@ app.get('/api/transaction/:txHash', async (req, res) => {
 
 app.post('/api/nft/create-collection', async (req, res) => {
   try {
-    const { seed, collection, symbol, transferable } = req.body;
+    const { seed, collection, symbol, transferable, image, mediaType } = req.body;
     if (!collection || !symbol) return res.status(400).json({ error: 'collection and symbol are required' });
-    res.json(await createCollection({ seed, collection, symbol, transferable }));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+    res.json(await createCollection({ seed, collection, symbol, transferable, image, mediaType }));
+  } catch (err: any) {
+    const status = err.message?.includes('exceeds maximum length') ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
 });
 
 app.post('/api/nft/mint', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, uri, name, toCoinPublicKey, toShieldedAddress, collection, symbol, transferable } = req.body;
+    const {
+      ownerSeed, contractAddress, uri, name, image, mediaType,
+      toCoinPublicKey, toShieldedAddress,
+      collection, symbol, transferable, collectionImage, collectionMediaType,
+    } = req.body;
     if (!ownerSeed || !uri || !name) return res.status(400).json({ error: 'ownerSeed, uri and name are required' });
-    res.json(await mintNft({ ownerSeed, contractAddress, uri, name, toCoinPublicKey, toShieldedAddress, collection, symbol, transferable }));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+    res.json(await mintNft({
+      ownerSeed, contractAddress, uri, name, image, mediaType,
+      toCoinPublicKey, toShieldedAddress,
+      collection, symbol, transferable, collectionImage, collectionMediaType,
+    }));
+  } catch (err: any) {
+    const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
 });
 
 app.post('/api/nft/approve', async (req, res) => {

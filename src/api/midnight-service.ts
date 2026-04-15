@@ -430,6 +430,23 @@ export async function registerDust(seed: string) {
   }
 }
 
+// String length limits (validated in the API, not enforced on-chain)
+export const FIELD_LIMITS = {
+  collection: 64,
+  symbol: 32,
+  name: 64,
+  uri: 128,
+  image: 128,
+  mediaType: 64,
+};
+
+function checkLen(field: keyof typeof FIELD_LIMITS, value: string): void {
+  const limit = FIELD_LIMITS[field];
+  if (value.length > limit) {
+    throw new Error(`${field} exceeds maximum length of ${limit} characters (got ${value.length})`);
+  }
+}
+
 // Helper function: resolve CoinPublicKey from various formats
 function resolveToCoinPublicKey(toCoinPublicKey?: string, toShieldedAddress?: string): string | undefined {
   if (toCoinPublicKey) return toCoinPublicKey;
@@ -446,13 +463,32 @@ export async function deployAndMintNft(params: {
   toShieldedAddress?: string;
   uri: string;
   name: string;
+  image?: string;          // optional per-token image URI
+  mediaType?: string;      // optional MIME type
   collection?: string;
   symbol?: string;
   transferable?: boolean;  // default: true
+  collectionImage?: string;     // collection-level image (only on new collection)
+  collectionMediaType?: string; // collection-level MIME (only on new collection)
 }) {
   const cfg = activeNetwork();
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
   const transferable = params.transferable !== false;
+  const collectionName = params.collection || 'MidnightNFT';
+  const symbolStr = params.symbol || 'MNFT';
+  const tokenImage = params.image || '';
+  const tokenMediaType = params.mediaType || '';
+  const collImage = params.collectionImage || '';
+  const collMedia = params.collectionMediaType || '';
+
+  checkLen('collection', collectionName);
+  checkLen('symbol', symbolStr);
+  checkLen('name', params.name);
+  checkLen('uri', params.uri);
+  checkLen('image', tokenImage);
+  checkLen('mediaType', tokenMediaType);
+  checkLen('image', collImage);
+  checkLen('mediaType', collMedia);
 
   const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
   const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
@@ -490,11 +526,11 @@ export async function deployAndMintNft(params: {
       compiledContract,
       privateStateId: 'nftPrivateState',
       initialPrivateState: {},
-      args: [params.collection || 'MidnightNFT', params.symbol || 'MNFT', ownerPubKey, transferable],
+      args: [collectionName, symbolStr, ownerPubKey, transferable, collImage, collMedia],
     });
 
     const contractAddress = deployed.deployTxData.public.contractAddress;
-    const mintResult = await deployed.callTx.mint(mintTo, params.uri, params.name);
+    const mintResult = await deployed.callTx.mint(mintTo, params.uri, params.name, tokenImage, tokenMediaType);
 
     return {
       contractAddress,
@@ -502,9 +538,13 @@ export async function deployAndMintNft(params: {
       owner: resolvedTo || coinPublicKey,
       uri: params.uri,
       name: params.name,
-      collection: params.collection || 'MidnightNFT',
-      symbol: params.symbol || 'MNFT',
+      image: tokenImage,
+      mediaType: tokenMediaType,
+      collection: collectionName,
+      symbol: symbolStr,
       transferable,
+      collectionImage: collImage,
+      collectionMediaType: collMedia,
       ownerSeed: params.seed,
       ownerCoinPublicKey: coinPublicKey,
       network: cfg.networkId,
@@ -529,13 +569,19 @@ export async function queryNftContract(contractAddress: string) {
   for (const [tokenId, owner] of state.owners) {
     let uri = '';
     let name = '';
+    let image = '';
+    let mediaType = '';
     try { if (state.tokenURIs.member(tokenId)) uri = state.tokenURIs.lookup(tokenId); } catch {}
     try { if (state.tokenNames?.member(tokenId)) name = state.tokenNames.lookup(tokenId); } catch {}
+    try { if (state.tokenImages?.member(tokenId)) image = state.tokenImages.lookup(tokenId); } catch {}
+    try { if (state.tokenMediaTypes?.member(tokenId)) mediaType = state.tokenMediaTypes.lookup(tokenId); } catch {}
     tokens.push({
       tokenId: tokenId.toString(),
       owner: Buffer.from(owner.bytes).toString('hex'),
       name,
       uri,
+      image,
+      mediaType,
     });
   }
 
@@ -543,6 +589,8 @@ export async function queryNftContract(contractAddress: string) {
     contractAddress,
     collectionName: state.collectionName,
     collectionSymbol: state.collectionSymbol,
+    collectionImage: state.collectionImage ?? '',
+    collectionMediaType: state.collectionMediaType ?? '',
     contractOwner: Buffer.from(state.contractOwner.bytes).toString('hex'),
     transferable: state.transferable === true,
     totalSupply: Number(state.nextTokenId),
@@ -707,9 +755,18 @@ export async function createCollection(params: {
   collection: string;
   symbol: string;
   transferable?: boolean;  // default: true
+  image?: string;          // optional collection-level image URI
+  mediaType?: string;      // optional MIME type for the collection image
 }) {
   const cfg = activeNetwork();
   const transferable = params.transferable !== false;
+  const image = params.image || '';
+  const mediaType = params.mediaType || '';
+
+  checkLen('collection', params.collection);
+  checkLen('symbol', params.symbol);
+  checkLen('image', image);
+  checkLen('mediaType', mediaType);
 
   // Generate seed or use existing one
   const seed = params.seed || Buffer.from(generateRandomSeed()).toString('hex');
@@ -747,7 +804,7 @@ export async function createCollection(params: {
       compiledContract,
       privateStateId: 'nftPrivateState',
       initialPrivateState: {},
-      args: [params.collection, params.symbol, ownerPubKey, transferable],
+      args: [params.collection, params.symbol, ownerPubKey, transferable, image, mediaType],
     });
 
     return {
@@ -756,6 +813,8 @@ export async function createCollection(params: {
       ownerCoinPublicKey: coinPublicKey,
       unshieldedAddress: walletInfo.unshieldedAddress,
       collection: params.collection,
+      image,
+      mediaType,
       symbol: params.symbol,
       network: cfg.networkId,
     };
@@ -769,14 +828,23 @@ export async function mintNft(params: {
   contractAddress?: string;  // if null -> create new collection
   uri: string;
   name: string;
+  image?: string;            // optional per-token image URI
+  mediaType?: string;        // optional MIME type
   toCoinPublicKey?: string;
   toShieldedAddress?: string;
   collection?: string;       // only when creating a new collection
   symbol?: string;           // only when creating a new collection
   transferable?: boolean;    // only when creating a new collection (default true)
+  collectionImage?: string;     // only when creating a new collection
+  collectionMediaType?: string; // only when creating a new collection
 }) {
   if (!params.name) throw new Error('name is required');
   const cfg = activeNetwork();
+
+  checkLen('name', params.name);
+  checkLen('uri', params.uri);
+  checkLen('image', params.image || '');
+  checkLen('mediaType', params.mediaType || '');
 
   // If no contractAddress -> automatically create a new collection
   if (!params.contractAddress) {
@@ -786,9 +854,13 @@ export async function mintNft(params: {
       toShieldedAddress: params.toShieldedAddress,
       uri: params.uri,
       name: params.name,
+      image: params.image,
+      mediaType: params.mediaType,
       collection: params.collection || 'MidnightNFT',
       symbol: params.symbol || 'MNFT',
       transferable: params.transferable,
+      collectionImage: params.collectionImage,
+      collectionMediaType: params.collectionMediaType,
     });
     return { ...result, newCollection: true };
   }
@@ -836,7 +908,9 @@ export async function mintNft(params: {
       initialPrivateState: {},
     });
 
-    const mintResult = await contract.callTx.mint(mintTo, params.uri, params.name);
+    const tokenImage = params.image || '';
+    const tokenMediaType = params.mediaType || '';
+    const mintResult = await contract.callTx.mint(mintTo, params.uri, params.name, tokenImage, tokenMediaType);
 
     return {
       contractAddress: params.contractAddress,
@@ -844,6 +918,8 @@ export async function mintNft(params: {
       owner: resolvedTo || coinPublicKey,
       uri: params.uri,
       name: params.name,
+      image: tokenImage,
+      mediaType: tokenMediaType,
       network: cfg.networkId,
       newCollection: false,
     };

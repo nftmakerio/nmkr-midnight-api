@@ -48,6 +48,13 @@ export { ZswapCoinPublicKey, ContractAddress };
 export sealed ledger collectionName: Opaque<"string">;
 export sealed ledger collectionSymbol: Opaque<"string">;
 
+// Optional collection-level image (e.g. a logo for the whole collection).
+// collectionImage holds a URI like "ipfs://..." or "https://..."
+// collectionMediaType holds the MIME type, e.g. "image/png" or "image/svg+xml".
+// Both are sealed and may be empty if not used.
+export sealed ledger collectionImage: Opaque<"string">;
+export sealed ledger collectionMediaType: Opaque<"string">;
+
 // The wallet that deployed the contract. Only this key may call mint().
 export ledger contractOwner: ZswapCoinPublicKey;
 
@@ -65,6 +72,10 @@ export ledger nextTokenId: Counter;
 export ledger owners: Map<Uint<128>, ZswapCoinPublicKey>;
 export ledger tokenURIs: Map<Uint<128>, Opaque<"string">>;
 export ledger tokenNames: Map<Uint<128>, Opaque<"string">>;
+// Per-token image URI and MIME type. Both maps may be sparse — a token can
+// have an image without a mediaType or vice versa, or neither.
+export ledger tokenImages: Map<Uint<128>, Opaque<"string">>;
+export ledger tokenMediaTypes: Map<Uint<128>, Opaque<"string">>;
 export ledger balanceMap: Map<ZswapCoinPublicKey, Counter>;
 
 // Approval tables (only used when transferable == true).
@@ -83,21 +94,27 @@ export ledger operatorApprovals: Map<ZswapCoinPublicKey, Map<ZswapCoinPublicKey,
 // =============================================================
 //
 // Called exactly once when the contract is deployed.
-//   _name, _symbol  -> human readable collection metadata
-//   _owner          -> the shielded coin public key that owns the contract
-//                      (only this key may mint new tokens)
-//   _transferable   -> true  = standard NFT collection
-//                      false = soulbound (no transfer/approve allowed)
+//   _name, _symbol     -> human readable collection metadata
+//   _owner             -> the shielded coin public key that owns the contract
+//                         (only this key may mint new tokens)
+//   _transferable      -> true  = standard NFT collection
+//                         false = soulbound (no transfer/approve allowed)
+//   _image             -> optional collection-level image URI ("" if unused)
+//   _mediaType         -> optional MIME type for the collection image ("" if unused)
 constructor(
   _name: Opaque<"string">,
   _symbol: Opaque<"string">,
   _owner: ZswapCoinPublicKey,
-  _transferable: Boolean
+  _transferable: Boolean,
+  _image: Opaque<"string">,
+  _mediaType: Opaque<"string">
 ) {
   collectionName = disclose(_name);
   collectionSymbol = disclose(_symbol);
   contractOwner = disclose(_owner);
   transferable = disclose(_transferable);
+  collectionImage = disclose(_image);
+  collectionMediaType = disclose(_mediaType);
 }
 
 // =============================================================
@@ -136,6 +153,21 @@ export circuit tokenName(tokenId: Uint<128>): Opaque<"string"> {
   return tokenNames.lookup(d_tokenId);
 }
 
+// Returns the per-token image URI. Reverts if token doesn't exist.
+// (mint always sets this field — empty string if no image was provided.)
+export circuit tokenImage(tokenId: Uint<128>): Opaque<"string"> {
+  const d_tokenId = disclose(tokenId);
+  assert(tokenImages.member(d_tokenId), "Token does not exist");
+  return tokenImages.lookup(d_tokenId);
+}
+
+// Returns the per-token MIME type (e.g. "image/png"). Reverts if token doesn't exist.
+export circuit tokenMediaType(tokenId: Uint<128>): Opaque<"string"> {
+  const d_tokenId = disclose(tokenId);
+  assert(tokenMediaTypes.member(d_tokenId), "Token does not exist");
+  return tokenMediaTypes.lookup(d_tokenId);
+}
+
 // Returns the highest minted token id + 1, i.e. the total number of mints.
 // Note: burned tokens are NOT subtracted — this counts all tokens that were
 // ever minted.
@@ -156,21 +188,31 @@ export circuit getApproved(tokenId: Uint<128>): ZswapCoinPublicKey {
 // Mint  — only the contract owner may call this
 // =============================================================
 //
-// Mints a brand new token with the given URI and name and assigns it to `to`.
-// Returns the new token id (starts at 0 for the first mint).
+// Mints a brand new token with the given URI, name, image and mediaType
+// and assigns it to `to`. Returns the new token id (starts at 0 for the
+// first mint).
+//
+//   uri       -> link to off-chain JSON metadata (e.g. ipfs://.../metadata.json)
+//   tokenName -> human readable name (e.g. "Cool NFT #5")
+//   image     -> link to the primary image (e.g. ipfs://.../image.png), "" if unused
+//   mediaType -> MIME type of the image (e.g. "image/png"), "" if unused
 //
 // Auth: only the wallet whose public key matches `contractOwner` may mint.
 // This is enforced by comparing ownPublicKey() (the caller) with contractOwner.
 export circuit mint(
   to: ZswapCoinPublicKey,
   uri: Opaque<"string">,
-  tokenName: Opaque<"string">
+  tokenName: Opaque<"string">,
+  image: Opaque<"string">,
+  mediaType: Opaque<"string">
 ): Uint<64> {
   assert(ownPublicKey() == contractOwner, "Only the contract owner can mint");
 
   const d_to = disclose(to);
   const d_uri = disclose(uri);
   const d_name = disclose(tokenName);
+  const d_image = disclose(image);
+  const d_mediaType = disclose(mediaType);
   const tokenId = nextTokenId.read();
   const tokenIdKey = tokenId as Uint<128>;
 
@@ -178,6 +220,8 @@ export circuit mint(
   owners.insert(tokenIdKey, d_to);
   tokenURIs.insert(tokenIdKey, d_uri);
   tokenNames.insert(tokenIdKey, d_name);
+  tokenImages.insert(tokenIdKey, d_image);
+  tokenMediaTypes.insert(tokenIdKey, d_mediaType);
 
   // Increment the recipient's token count
   if (balanceMap.member(d_to)) {
