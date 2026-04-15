@@ -18,6 +18,7 @@ import {
   getBalanceByAddress,
   recoverFromMnemonic,
   resolveShieldedAddress,
+  getVersionInfo,
   transferNight,
   queryNftContract,
   getUtxos,
@@ -62,6 +63,7 @@ Every endpoint accepts an optional \`network\` parameter. Default is \`preview\`
       { name: 'Transfer', description: 'NIGHT token transfers' },
       { name: 'NFT', description: 'NFT deploy, mint and query' },
       { name: 'Watch', description: 'Persistent wallet monitoring — watched wallets stay synced and respond instantly' },
+      { name: 'System', description: 'API health and version info' },
     ],
   },
   apis: [],
@@ -74,6 +76,14 @@ swaggerSpec.components = {
 };
 
 swaggerSpec.paths = {
+  '/api/version': {
+    get: {
+      tags: ['System'], summary: 'Get version info for all components',
+      description: 'Returns versions of API, Node.js, Compact compiler, zkir, compiled contract, Midnight Node, Proof Server and SDK packages.',
+      parameters: [{ in: 'query', name: 'network', schema: networkEnum }],
+      responses: { 200: { description: 'Version info' } },
+    },
+  },
   '/api/wallet/create': {
     post: {
       tags: ['Wallet'], summary: 'Create new wallet',
@@ -570,6 +580,13 @@ app.get('/api/nft/query/:contractAddress', async (req, res) => {
     if (err.message === 'Contract not found') return res.status(404).json({ error: 'Contract not found' });
     res.status(500).json({ error: err.message });
   }
+});
+
+app.get('/api/version', async (req, res) => {
+  try {
+    const network = req.query.network as string | undefined;
+    res.json(await getVersionInfo(network));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/health', (_req, res) => {

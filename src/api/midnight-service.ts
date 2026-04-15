@@ -124,6 +124,115 @@ export function recoverFromMnemonic(mnemonic: string, network?: string) {
   return getWalletInfo(seed, network);
 }
 
+export async function getVersionInfo(network?: string) {
+  const cfg = useNetwork(network);
+
+  // API version from package.json
+  const fs = await import('node:fs');
+  let apiVersion = 'unknown';
+  let dependencies: Record<string, string> = {};
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../package.json'), 'utf-8'));
+    apiVersion = pkg.version;
+    dependencies = Object.fromEntries(
+      Object.entries(pkg.dependencies as Record<string, string>)
+        .filter(([k]) => k.startsWith('@midnight-ntwrk/'))
+    );
+  } catch {}
+
+  // Node.js version
+  const nodeVersion = process.version;
+
+  // Compact compiler + zkir versions (if available locally)
+  const { execFile } = await import('node:child_process');
+  const { promisify } = await import('node:util');
+  const execFileAsync = promisify(execFile);
+  const tryExec = async (cmd: string, args: string[]): Promise<string | null> => {
+    try {
+      const { stdout } = await execFileAsync(cmd, args, { timeout: 5000 });
+      return stdout.trim();
+    } catch { return null; }
+  };
+  const compactc = await tryExec('compactc', ['--version']);
+  const zkir = await tryExec('zkir', ['--version']);
+
+  // Compiled contract version info
+  let contractInfo: any = null;
+  try {
+    const info = JSON.parse(fs.readFileSync(path.join(CONTRACT_PATH, 'compiler/contract-info.json'), 'utf-8'));
+    contractInfo = {
+      compilerVersion: info['compiler-version'],
+      languageVersion: info['language-version'],
+      runtimeVersion: info['runtime-version'],
+    };
+  } catch {}
+
+  // Proof server version
+  let proofServerVersion: string | null = null;
+  try {
+    const res = await fetch(`${cfg.proofServer}/version`, { signal: AbortSignal.timeout(5000) });
+    proofServerVersion = (await res.text()).trim();
+  } catch {}
+
+  // Midnight Node version + chain
+  let nodeRpcVersion: string | null = null;
+  let nodeRpcChain: string | null = null;
+  try {
+    const httpUrl = cfg.nodeRpc.replace(/^wss?:/, 'https:');
+    const [verRes, chainRes] = await Promise.all([
+      fetch(httpUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'system_version', params: [] }),
+        signal: AbortSignal.timeout(5000),
+      }).then(r => r.json()),
+      fetch(httpUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'system_chain', params: [] }),
+        signal: AbortSignal.timeout(5000),
+      }).then(r => r.json()),
+    ]);
+    nodeRpcVersion = verRes.result || null;
+    nodeRpcChain = chainRes.result || null;
+  } catch {}
+
+  // Indexer reachability (it doesn't expose a version via GraphQL)
+  let indexerReachable = false;
+  try {
+    const res = await fetch(cfg.indexerHttp, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: '{ __typename }' }),
+      signal: AbortSignal.timeout(5000),
+    });
+    indexerReachable = res.ok;
+  } catch {}
+
+  return {
+    api: {
+      version: apiVersion,
+      nodeJs: nodeVersion,
+    },
+    network: {
+      name: cfg.networkId,
+      nodeRpc: cfg.nodeRpc,
+      nodeRpcVersion,
+      nodeRpcChain,
+      indexer: cfg.indexerHttp,
+      indexerReachable,
+      proofServer: cfg.proofServer,
+      proofServerVersion,
+    },
+    tooling: {
+      compactc,
+      zkir,
+    },
+    contract: contractInfo,
+    dependencies,
+  };
+}
+
 export function resolveShieldedAddress(shieldedAddr: string) {
   const parsed = MidnightBech32m.parse(shieldedAddr);
   const network = parsed.network;
