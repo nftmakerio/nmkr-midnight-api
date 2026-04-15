@@ -4,8 +4,10 @@ node_modules/
 # Build output
 dist/
 
-# Compiled contract artifacts (regenerate with: compact --skip-zk + zkir in Docker)
-contracts/managed/
+# Compiled contract artifacts — COMMITTED (deterministic from source)
+# Regenerate with:
+#   compactc --skip-zk contracts/nmkr-nft.compact contracts/managed/nmkr-nft
+#   zkir compile-many contracts/managed/nmkr-nft/zkir contracts/managed/nmkr-nft/keys
 
 # Private state databases (LevelDB)
 nft-state-*/
