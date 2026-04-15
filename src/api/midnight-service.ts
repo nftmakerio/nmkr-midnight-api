@@ -77,10 +77,7 @@ async function withWallet<T>(seed: string, cfg: NetworkConfig, fn: (ctx: WalletC
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     return await fn(ctx, state);
   } finally {
-    // Only stop if it was a temporary wallet (not cached)
-    if (!cached) {
-      if (!cached) await ctx.facade.stop();
-    }
+    if (!cached) await ctx.facade.stop();
   }
 }
 

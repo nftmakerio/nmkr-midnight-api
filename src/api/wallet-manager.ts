@@ -152,23 +152,24 @@ class WalletManager {
   }
 
   async getOrCreateContext(seed: string): Promise<{ ctx: WalletContext; cached: boolean }> {
+    const isSynced = (s: any) =>
+      s.isSynced === true ||
+      s.shielded?.progress?.isStrictlyComplete === true ||
+      s.shielded?.progress?.isCompleteWithin === true;
+
     const managed = this.get(seed);
     if (managed) {
-      // Use cached wallet even if not "fully synced" — state is live-updating
+      // Wait until the cached wallet has at least reached synced state once
+      await Rx.firstValueFrom(
+        managed.ctx.facade.state().pipe(Rx.filter(isSynced)),
+      );
       return { ctx: managed.ctx, cached: true };
     }
 
     // Not watched — create temporary wallet
     const ctx = await this.createWalletContext(seed);
     await Rx.firstValueFrom(
-      ctx.facade.state().pipe(
-        Rx.throttleTime(5_000),
-        Rx.filter((s: any) =>
-          s.isSynced === true ||
-          s.shielded?.progress?.isSynced === true ||
-          !!(s.unshielded?.availableCoins?.length !== undefined && s.dust?.availableCoins !== undefined),
-        ),
-      ),
+      ctx.facade.state().pipe(Rx.throttleTime(5_000), Rx.filter(isSynced)),
     );
     return { ctx, cached: false };
   }
@@ -221,13 +222,10 @@ class WalletManager {
     const sub = ctx.facade.state().pipe(Rx.throttleTime(3_000)).subscribe({
       next: (state: any) => {
         managed.lastState = state;
-        // SDK v3 uses different sync signalling — check multiple indicators
         managed.synced =
           state.isSynced === true ||
-          state.shielded?.progress?.isSynced === true ||
-          (state.shielded?.progress?.syncedToPercent ?? 0) >= 1 ||
-          // Fallback: we have state data and availableCoins populated
-          !!(state.unshielded?.availableCoins !== undefined);
+          state.shielded?.progress?.isStrictlyComplete === true ||
+          state.shielded?.progress?.isCompleteWithin === true;
       },
       error: (err) => {
         console.error(`[WalletManager] Sync error for ${info.seed.substring(0, 12)}...: ${err.message}`);
