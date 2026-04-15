@@ -29,7 +29,7 @@ import {
   mintNft,
   transferNft,
 } from './midnight-service.js';
-import { NETWORKS } from './networks.js';
+import { ACTIVE_NETWORK, PUBLIC_API_URL } from './networks.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
 
 const app = express();
@@ -38,24 +38,22 @@ app.use(express.json());
 
 // ---- Swagger ----
 
-const networkEnum = { type: 'string', enum: ['preview', 'preprod', 'mainnet'], default: 'preview', description: 'Network (preview, preprod, mainnet)' };
-
 const swaggerSpec: any = swaggerJsdoc({
   definition: {
     openapi: '3.0.0',
     info: {
-      title: 'Midnight Network API',
-      version: '1.1.0',
+      title: `Midnight ${ACTIVE_NETWORK.networkId.toUpperCase()} API`,
+      version: '1.2.0',
       description: `REST API for the Midnight Network.
 
-Supported networks: **preview**, **preprod**, **mainnet**
+**This instance runs on the \`${ACTIVE_NETWORK.networkId}\` network.**
 
-Every endpoint accepts an optional \`network\` parameter. Default is \`preview\`.
+For other networks, use the corresponding API instance.
 
 **Seeds:** Use the full 128-char hex seed (from mnemonic recovery) for 1AM/Lace wallet compatibility. 64-char seeds also work but produce different addresses.`,
     },
     servers: [
-      { url: 'https://midnight-api.nmkr.io', description: 'Production' },
+      { url: PUBLIC_API_URL, description: `Production (${ACTIVE_NETWORK.networkId})` },
       { url: 'http://localhost:3000', description: 'Local' },
     ],
     tags: [
@@ -80,7 +78,6 @@ swaggerSpec.paths = {
     get: {
       tags: ['System'], summary: 'Get version info for all components',
       description: 'Returns versions of API, Node.js, Compact compiler, zkir, compiled contract, Midnight Node, Proof Server and SDK packages.',
-      parameters: [{ in: 'query', name: 'network', schema: networkEnum }],
       responses: { 200: { description: 'Version info' } },
     },
   },
@@ -88,7 +85,6 @@ swaggerSpec.paths = {
     post: {
       tags: ['Wallet'], summary: 'Create new wallet',
       description: 'Generates a new seed and derives all addresses.',
-      requestBody: { content: { 'application/json': { schema: { type: 'object', properties: { network: networkEnum } } } } },
       responses: { 200: { description: 'Wallet created', content: { 'application/json': { schema: { type: 'object', properties: {
         seed: { type: 'string', description: 'Hex seed (SECRET!)' },
         mnemonic: { type: 'string', description: '24-word recovery phrase (SECRET!)' },
@@ -105,7 +101,6 @@ swaggerSpec.paths = {
       description: 'Derives CoinPublicKey and addresses from a seed.',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
         seed: { type: 'string', description: 'Hex seed (64 or 128 hex chars). Use 128 chars (full BIP39 seed) for 1AM/Lace compatibility.' },
-        network: networkEnum,
       } } } } },
       responses: { 200: { description: 'Wallet info' }, 400: { description: 'Error' } },
     },
@@ -116,7 +111,6 @@ swaggerSpec.paths = {
       description: 'Derives the seed and all addresses from a 24-word BIP39 mnemonic phrase.',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['mnemonic'], properties: {
         mnemonic: { type: 'string', description: '24-word recovery phrase', example: 'hockey spring pottery noble guess purchase inform improve walnut expand drink body notable opinion dish abuse ketchup file win animal embody ethics donor march' },
-        network: networkEnum,
       } } } } },
       responses: { 200: { description: 'Recovered wallet info' }, 400: { description: 'Invalid mnemonic' } },
     },
@@ -137,7 +131,6 @@ swaggerSpec.paths = {
       description: 'Queries the unshielded NIGHT balance. The network is detected from the address (mn_addr_preview1... / mn_addr_preprod1... / mn_addr1...).',
       parameters: [
         { in: 'path', name: 'address', required: true, schema: { type: 'string' }, example: 'mn_addr_preview1c0g6vynydk8p6clmd548lhgw6pchd0hsuzqdyvj5zrptguul22mspy9xw6' },
-        { in: 'query', name: 'network', schema: networkEnum },
       ],
       responses: { 200: { description: 'Balance' }, 500: { description: 'Error' } },
     },
@@ -148,7 +141,6 @@ swaggerSpec.paths = {
       description: 'Synchronizes the wallet and returns NIGHT + Dust balance. Takes 10-30s.',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
         seed: { type: 'string' },
-        network: networkEnum,
       } } } } },
       responses: { 200: { description: 'Balance with Dust info' }, 500: { description: 'Error' } },
     },
@@ -159,7 +151,6 @@ swaggerSpec.paths = {
       description: 'Returns all unshielded UTXOs of a wallet with value, token type, dust registration and transaction details. Requires the seed (wallet sync needed).',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
         seed: { type: 'string', example: '78053916a197eca740f9537da779ff7a89e213e6cc2f493ca2697161fe6baa3f' },
-        network: networkEnum,
       } } } } },
       responses: {
         200: { description: 'UTXO list', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -189,7 +180,6 @@ swaggerSpec.paths = {
       description: 'Registers NIGHT UTXOs for automatic DUST generation. DUST is required for transaction fees.',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
         seed: { type: 'string' },
-        network: networkEnum,
       } } } } },
       responses: { 200: { description: 'Registration' }, 500: { description: 'Error' } },
     },
@@ -203,7 +193,6 @@ swaggerSpec.paths = {
         toAddress: { type: 'string', description: 'Recipient mn_addr_...', example: 'mn_addr_preprod1fx3m83tputlrjrl7j94h4mxmxpevg0542d98w4ssq4canfqrvt7swmc7a9' },
         amount: { type: 'number', description: 'Amount in NIGHT', example: 5 },
         dustSeed: { type: 'string', description: 'Optional: seed of the Dust provider' },
-        network: networkEnum,
       } } } } },
       responses: { 200: { description: 'Transfer successful' }, 500: { description: 'Error' } },
     },
@@ -214,7 +203,6 @@ swaggerSpec.paths = {
       description: 'Returns all unshielded transactions of a wallet with sender, recipient, amounts and whether it was a receive or send. Requires the seed (wallet sync). Can take 15-30s.',
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
         seed: { type: 'string', example: '78053916a197eca740f9537da779ff7a89e213e6cc2f493ca2697161fe6baa3f' },
-        network: networkEnum,
       } } } } },
       responses: {
         200: { description: 'Transaction list', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -242,7 +230,6 @@ swaggerSpec.paths = {
       description: 'Shows the details of an unshielded transaction: inputs (FROM), outputs (TO), amounts and block info. The txHash can be obtained e.g. from the intentHash of UTXOs or as the return value of a transfer.',
       parameters: [
         { in: 'path', name: 'txHash', required: true, schema: { type: 'string' }, description: 'Transaction hash (hex)', example: '0adf6a6556b08088fb040d19869474f9cba2c5b232e5f943e36c4678ceaef9aa' },
-        { in: 'query', name: 'network', schema: networkEnum },
       ],
       responses: {
         200: { description: 'Transaction details', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -276,7 +263,6 @@ swaggerSpec.paths = {
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
         address: { type: 'string', description: 'Unshielded address (mn_addr_...) — lightweight mode, no seed needed', example: 'mn_addr_preview1c0g6vynydk8p6clmd548lhgw6pchd0hsuzqdyvj5zrptguul22mspy9xw6' },
         seed: { type: 'string', description: 'Wallet seed — full mode with WebSocket sync' },
-        network: networkEnum,
         label: { type: 'string', description: 'Optional label', example: 'Treasury Wallet' },
       } } } } },
       responses: { 200: { description: 'Wallet/address added' }, 400: { description: 'Either address or seed is required' }, 500: { description: 'Error' } },
@@ -289,7 +275,6 @@ swaggerSpec.paths = {
       requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', properties: {
         address: { type: 'string' },
         seed: { type: 'string' },
-        network: networkEnum,
       } } } } },
       responses: { 200: { description: 'Removed' }, 404: { description: 'Not found in watch list' } },
     },
@@ -309,7 +294,6 @@ swaggerSpec.paths = {
         seed: { type: 'string', description: 'Optional: seed of the deployer. If empty, a new wallet is generated.' },
         collection: { type: 'string', description: 'Collection name', example: 'NMKRMidnightNFT' },
         symbol: { type: 'string', description: 'Collection symbol', example: 'NMKR' },
-        network: networkEnum,
       } } } } },
       responses: {
         200: { description: 'Collection created', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -337,7 +321,6 @@ swaggerSpec.paths = {
         toShieldedAddress: { type: 'string', description: 'Optional: shielded address (mn_shield-addr_...) — resolved automatically' },
         collection: { type: 'string', description: 'Only for new collection: name', example: 'MidnightNFT' },
         symbol: { type: 'string', description: 'Only for new collection: symbol', example: 'MNFT' },
-        network: networkEnum,
       } } } } },
       responses: {
         200: { description: 'NFT minted', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -362,7 +345,6 @@ swaggerSpec.paths = {
         tokenId: { type: 'string', description: 'Token ID to transfer (e.g. "0", "1")', example: '0' },
         toCoinPublicKey: { type: 'string', description: 'Recipient CoinPublicKey (hex)' },
         toShieldedAddress: { type: 'string', description: 'Recipient shielded address (mn_shield-addr_...) — resolved automatically' },
-        network: networkEnum,
       } } } } },
       responses: {
         200: { description: 'NFT transferred', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -382,7 +364,6 @@ swaggerSpec.paths = {
       description: 'Reads collection info and all tokens with owner and URI.',
       parameters: [
         { in: 'path', name: 'contractAddress', required: true, schema: { type: 'string' }, example: '5d7824b0a708cc12669896513a18841fc2407e0314f125568e16931b8252797d' },
-        { in: 'query', name: 'network', schema: networkEnum },
       ],
       responses: { 200: { description: 'Contract state' }, 404: { description: 'Not found' } },
     },
@@ -397,24 +378,24 @@ app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
 
 // ---- Routes ----
 
-app.post('/api/wallet/create', async (req, res) => {
-  try { res.json(await createNewWallet(req.body?.network)); }
+app.post('/api/wallet/create', async (_req, res) => {
+  try { res.json(await createNewWallet()); }
   catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/wallet/info', (req, res) => {
   try {
-    const { seed, network } = req.body;
+    const { seed } = req.body;
     if (!seed) return res.status(400).json({ error: 'seed is required' });
-    res.json(getWalletInfo(seed, network));
+    res.json(getWalletInfo(seed));
   } catch (err: any) { res.status(400).json({ error: err.message }); }
 });
 
 app.post('/api/wallet/recover', (req, res) => {
   try {
-    const { mnemonic, network } = req.body;
+    const { mnemonic } = req.body;
     if (!mnemonic) return res.status(400).json({ error: 'mnemonic is required' });
-    res.json(recoverFromMnemonic(mnemonic, network));
+    res.json(recoverFromMnemonic(mnemonic));
   } catch (err: any) { res.status(400).json({ error: err.message }); }
 });
 
@@ -428,55 +409,53 @@ app.post('/api/wallet/resolve-shielded', (req, res) => {
 
 app.get('/api/wallet/balance/:address', async (req, res) => {
   try {
-    const network = req.query.network as string | undefined;
-    res.json(await getBalanceByAddress(req.params.address, network));
+    res.json(await getBalanceByAddress(req.params.address));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/wallet/balance', async (req, res) => {
   try {
-    const { seed, network } = req.body;
+    const { seed } = req.body;
     if (!seed) return res.status(400).json({ error: 'seed is required' });
-    res.json(await getBalanceBySeed(seed, network));
+    res.json(await getBalanceBySeed(seed));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/wallet/utxos', async (req, res) => {
   try {
-    const { seed, network } = req.body;
+    const { seed } = req.body;
     if (!seed) return res.status(400).json({ error: 'seed is required' });
-    res.json(await getUtxos(seed, network));
+    res.json(await getUtxos(seed));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/wallet/register-dust', async (req, res) => {
   try {
-    const { seed, network } = req.body;
+    const { seed } = req.body;
     if (!seed) return res.status(400).json({ error: 'seed is required' });
-    res.json(await registerDust(seed, network));
+    res.json(await registerDust(seed));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/transfer/night', async (req, res) => {
   try {
-    const { senderSeed, toAddress, amount, dustSeed, network } = req.body;
+    const { senderSeed, toAddress, amount, dustSeed } = req.body;
     if (!senderSeed || !toAddress || !amount) return res.status(400).json({ error: 'senderSeed, toAddress and amount are required' });
-    res.json(await transferNight({ senderSeed, toAddress, amount, dustSeed, network }));
+    res.json(await transferNight({ senderSeed, toAddress, amount, dustSeed }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/wallet/transactions', async (req, res) => {
   try {
-    const { seed, network } = req.body;
+    const { seed } = req.body;
     if (!seed) return res.status(400).json({ error: 'seed is required' });
-    res.json(await getTransactionHistory(seed, network));
+    res.json(await getTransactionHistory(seed));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/transaction/:txHash', async (req, res) => {
   try {
-    const network = req.query.network as string | undefined;
-    res.json(await getTransaction(req.params.txHash, network));
+    res.json(await getTransaction(req.params.txHash));
   } catch (err: any) {
     if (err.message === 'Transaction not found') return res.status(404).json({ error: 'Transaction not found' });
     res.status(500).json({ error: err.message });
@@ -485,17 +464,17 @@ app.get('/api/transaction/:txHash', async (req, res) => {
 
 app.post('/api/nft/create-collection', async (req, res) => {
   try {
-    const { seed, collection, symbol, network } = req.body;
+    const { seed, collection, symbol } = req.body;
     if (!collection || !symbol) return res.status(400).json({ error: 'collection and symbol are required' });
-    res.json(await createCollection({ seed, collection, symbol, network }));
+    res.json(await createCollection({ seed, collection, symbol }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/nft/mint', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, uri, toCoinPublicKey, toShieldedAddress, collection, symbol, network } = req.body;
+    const { ownerSeed, contractAddress, uri, toCoinPublicKey, toShieldedAddress, collection, symbol } = req.body;
     if (!ownerSeed || !uri) return res.status(400).json({ error: 'ownerSeed and uri are required' });
-    res.json(await mintNft({ ownerSeed, contractAddress, uri, toCoinPublicKey, toShieldedAddress, collection, symbol, network }));
+    res.json(await mintNft({ ownerSeed, contractAddress, uri, toCoinPublicKey, toShieldedAddress, collection, symbol }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
@@ -503,29 +482,24 @@ app.post('/api/nft/mint', async (req, res) => {
 
 app.post('/api/watch/add', async (req, res) => {
   try {
-    const { seed, address, network, label } = req.body;
-    const n = network || 'preview';
+    const { seed, address, label } = req.body;
 
     if (seed) {
-      // Full mode — SDK WebSocket sync
-      const managed = await walletManager.add(seed, n, label);
+      const managed = await walletManager.add(seed, label);
       res.json({
         mode: 'full',
         status: 'watching',
         synced: managed.synced,
         label: managed.info.label,
-        network: n,
         ...managed.addresses,
       });
     } else if (address) {
-      // Lightweight mode — CLI polling
-      const entry = addressWatcher.add(address, n, label);
+      const entry = addressWatcher.add(address, label);
       res.json({
         mode: 'lightweight',
         status: 'watching',
         address: entry.address,
         label: entry.label,
-        network: n,
         pollInterval: '30s',
         lastBalance: entry.lastBalance,
         lastChecked: entry.lastChecked,
@@ -538,15 +512,13 @@ app.post('/api/watch/add', async (req, res) => {
 
 app.post('/api/watch/remove', async (req, res) => {
   try {
-    const { seed, address, network } = req.body;
-    const n = network || 'preview';
-
+    const { seed, address } = req.body;
     if (seed) {
-      const removed = await walletManager.remove(seed, n);
+      const removed = await walletManager.remove(seed);
       if (!removed) return res.status(404).json({ error: 'Wallet not found in watch list' });
       res.json({ status: 'removed', mode: 'full' });
     } else if (address) {
-      const removed = addressWatcher.remove(address, n);
+      const removed = addressWatcher.remove(address);
       if (!removed) return res.status(404).json({ error: 'Address not found in watch list' });
       res.json({ status: 'removed', mode: 'lightweight' });
     } else {
@@ -564,17 +536,16 @@ app.get('/api/watch/list', (_req, res) => {
 
 app.post('/api/nft/transfer', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, tokenId, toCoinPublicKey, toShieldedAddress, network } = req.body;
+    const { ownerSeed, contractAddress, tokenId, toCoinPublicKey, toShieldedAddress } = req.body;
     if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
     if (!toCoinPublicKey && !toShieldedAddress) return res.status(400).json({ error: 'Either toCoinPublicKey or toShieldedAddress is required' });
-    res.json(await transferNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress, network }));
+    res.json(await transferNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/nft/query/:contractAddress', async (req, res) => {
   try {
-    const network = req.query.network as string | undefined;
-    const result = await queryNftContract(req.params.contractAddress, network);
+    const result = await queryNftContract(req.params.contractAddress);
     res.json(result);
   } catch (err: any) {
     if (err.message === 'Contract not found') return res.status(404).json({ error: 'Contract not found' });
@@ -582,15 +553,14 @@ app.get('/api/nft/query/:contractAddress', async (req, res) => {
   }
 });
 
-app.get('/api/version', async (req, res) => {
+app.get('/api/version', async (_req, res) => {
   try {
-    const network = req.query.network as string | undefined;
-    res.json(await getVersionInfo(network));
+    res.json(await getVersionInfo());
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', networks: Object.keys(NETWORKS), defaultNetwork: 'preview' });
+  res.json({ status: 'ok', network: ACTIVE_NETWORK.networkId });
 });
 
 // ---- Start ----
@@ -607,7 +577,8 @@ walletManager.initialize().then(() => {
     console.log(`  Swagger:  http://localhost:${PORT}/api-docs`);
     console.log(`  Health:   http://localhost:${PORT}/api/health`);
     console.log('');
-    console.log(`  Networks: preview, preprod, mainnet`);
+    console.log(`  Network:  ${ACTIVE_NETWORK.networkId}`);
+    console.log(`  Public:   ${PUBLIC_API_URL}`);
     console.log(`  Watched:  ${walletManager.list().length} wallet(s)`);
     console.log('');
   });

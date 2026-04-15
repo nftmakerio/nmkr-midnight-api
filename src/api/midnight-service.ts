@@ -32,7 +32,7 @@ import * as Rx from 'rxjs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as bip39 from 'bip39';
-import { type NetworkConfig, type NetworkName, getNetwork } from './networks.js';
+import { type NetworkConfig, ACTIVE_NETWORK } from './networks.js';
 import { walletManager, type WalletContext } from './wallet-manager.js';
 
 // @ts-expect-error: Needed for GraphQL subscriptions
@@ -41,12 +41,16 @@ globalThis.WebSocket = WebSocket;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONTRACT_PATH = path.resolve(__dirname, '../../contracts/managed/nmkr-nft');
 
-// ---- Network Helpers ----
+// ---- Network ----
+// Single fixed network per instance (set via MIDNIGHT_NETWORK env var)
 
-function useNetwork(network?: string): NetworkConfig {
-  const cfg = getNetwork(network);
-  setNetworkId(cfg.networkId as any);
-  return cfg;
+let networkInitialized = false;
+function activeNetwork(): NetworkConfig {
+  if (!networkInitialized) {
+    setNetworkId(ACTIVE_NETWORK.networkId as any);
+    networkInitialized = true;
+  }
+  return ACTIVE_NETWORK;
 }
 
 // ---- Key Derivation ----
@@ -63,12 +67,12 @@ function deriveKeysFromSeed(seed: string) {
 // ---- Wallet helpers ----
 // Uses WalletManager cache if available, otherwise creates temporary wallet
 
-async function getWalletCtx(seed: string, cfg: NetworkConfig): Promise<{ ctx: WalletContext; cached: boolean }> {
-  return walletManager.getOrCreateContext(seed, cfg);
+async function getWalletCtx(seed: string, _cfg?: NetworkConfig): Promise<{ ctx: WalletContext; cached: boolean }> {
+  return walletManager.getOrCreateContext(seed);
 }
 
 async function withWallet<T>(seed: string, cfg: NetworkConfig, fn: (ctx: WalletContext, state: any) => Promise<T>): Promise<T> {
-  const { ctx, cached } = await getWalletCtx(seed, cfg);
+  const { ctx, cached } = await getWalletCtx(seed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     return await fn(ctx, state);
@@ -84,17 +88,17 @@ async function withWallet<T>(seed: string, cfg: NetworkConfig, fn: (ctx: WalletC
 // Public API
 // ================================================================
 
-export function createNewWallet(network?: string) {
-  const cfg = useNetwork(network);
+export function createNewWallet() {
+  const cfg = activeNetwork();
   // Generate 24-word mnemonic (256 bits of entropy)
   const mnemonic = bip39.generateMnemonic(256);
   // Derive full 64-byte seed from mnemonic (compatible with 1AM/Lace wallets)
   const seed = bip39.mnemonicToSeedSync(mnemonic).toString('hex');
-  return { ...getWalletInfo(seed, network), mnemonic };
+  return { ...getWalletInfo(seed), mnemonic };
 }
 
-export function getWalletInfo(seed: string, network?: string) {
-  const cfg = useNetwork(network);
+export function getWalletInfo(seed: string) {
+  const cfg = activeNetwork();
   const keys = deriveKeysFromSeed(seed);
   const zswapKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
   const coinPublicKey = zswapKeys.coinPublicKey as string;
@@ -114,18 +118,18 @@ export function getWalletInfo(seed: string, network?: string) {
   };
 }
 
-export function recoverFromMnemonic(mnemonic: string, network?: string) {
-  const cfg = useNetwork(network);
+export function recoverFromMnemonic(mnemonic: string) {
+  const cfg = activeNetwork();
   if (!bip39.validateMnemonic(mnemonic)) {
     throw new Error('Invalid mnemonic phrase');
   }
   // Use full 64-byte seed (compatible with 1AM/Lace wallets)
   const seed = bip39.mnemonicToSeedSync(mnemonic).toString('hex');
-  return getWalletInfo(seed, network);
+  return getWalletInfo(seed);
 }
 
-export async function getVersionInfo(network?: string) {
-  const cfg = useNetwork(network);
+export async function getVersionInfo() {
+  const cfg = activeNetwork();
 
   // API version from package.json
   const fs = await import('node:fs');
@@ -246,14 +250,13 @@ export function resolveShieldedAddress(shieldedAddr: string) {
   };
 }
 
-export async function getBalanceByAddress(address: string, network?: string) {
-  const cfg = useNetwork(network);
+export async function getBalanceByAddress(address: string) {
+  const cfg = activeNetwork();
   const { execFile } = await import('node:child_process');
   const { promisify } = await import('node:util');
   const execFileAsync = promisify(execFile);
 
-  const args = ['balance', address, '--json'];
-  if (network) args.push('--network', cfg.networkId);
+  const args = ['balance', address, '--json', '--network', cfg.networkId];
 
   const { stdout } = await execFileAsync('midnight', args, { timeout: 30_000 });
   const result = JSON.parse(stdout.trim());
@@ -282,12 +285,12 @@ function getDustBalance(dustState: any): { dustRaw: string; dustFormatted: strin
   };
 }
 
-export async function getBalanceBySeed(seed: string, network?: string) {
-  const cfg = useNetwork(network);
+export async function getBalanceBySeed(seed: string) {
+  const cfg = activeNetwork();
   return withWallet(seed, cfg, async (_ctx, state) => {
     const nightBalance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
     const dust = getDustBalance(state.dust);
-    const info = getWalletInfo(seed, network);
+    const info = getWalletInfo(seed);
     return {
       ...info,
       balances: {
@@ -304,19 +307,19 @@ export async function transferNight(params: {
   toAddress: string;
   amount: number;
   dustSeed?: string;
-  network?: string;
+
 }) {
-  const cfg = useNetwork(params.network);
+  const cfg = activeNetwork();
   const amountRaw = BigInt(Math.round(params.amount * 1_000_000));
 
-  const { ctx: sender, cached: senderCached } = await getWalletCtx(params.senderSeed, cfg);
+  const { ctx: sender, cached: senderCached } = await getWalletCtx(params.senderSeed);
   let dustSecretKey = sender.dustSecretKey;
   let dustCtx: WalletContext | null = null;
   let dustCached = false;
 
   try {
     if (params.dustSeed && params.dustSeed !== params.senderSeed) {
-      const dust = await getWalletCtx(params.dustSeed, cfg);
+      const dust = await getWalletCtx(params.dustSeed);
       dustSecretKey = dust.ctx.dustSecretKey;
       dustCtx = dust.ctx;
       dustCached = dust.cached;
@@ -349,9 +352,9 @@ export async function transferNight(params: {
   }
 }
 
-export async function registerDust(seed: string, network?: string) {
-  const cfg = useNetwork(network);
-  const { ctx, cached } = await getWalletCtx(seed, cfg);
+export async function registerDust(seed: string) {
+  const cfg = activeNetwork();
+  const { ctx, cached } = await getWalletCtx(seed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const nightBalance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
@@ -423,9 +426,9 @@ export async function deployAndMintNft(params: {
   uri: string;
   collection?: string;
   symbol?: string;
-  network?: string;
+
 }) {
-  const cfg = useNetwork(params.network);
+  const cfg = activeNetwork();
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
 
   const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
@@ -434,7 +437,7 @@ export async function deployAndMintNft(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const { ctx, cached } = await getWalletCtx(params.seed, cfg);
+  const { ctx, cached } = await getWalletCtx(params.seed);
   try {
 
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
@@ -484,8 +487,8 @@ export async function deployAndMintNft(params: {
   }
 }
 
-export async function queryNftContract(contractAddress: string, network?: string) {
-  const cfg = useNetwork(network);
+export async function queryNftContract(contractAddress: string) {
+  const cfg = activeNetwork();
 
   const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
   const ledgerParser = contractModule.ledger;
@@ -517,10 +520,10 @@ export async function queryNftContract(contractAddress: string, network?: string
   };
 }
 
-export async function getUtxos(seed: string, network?: string) {
-  const cfg = useNetwork(network);
+export async function getUtxos(seed: string) {
+  const cfg = activeNetwork();
   return withWallet(seed, cfg, async (_ctx, state) => {
-    const info = getWalletInfo(seed, network);
+    const info = getWalletInfo(seed);
     const utxos = state.unshielded.availableCoins.map((coin: any, i: number) => ({
       index: i,
       value: coin.utxo.value?.toString(),
@@ -543,8 +546,8 @@ export async function getUtxos(seed: string, network?: string) {
   });
 }
 
-export async function getTransaction(txHash: string, network?: string) {
-  const cfg = useNetwork(network);
+export async function getTransaction(txHash: string) {
+  const cfg = activeNetwork();
 
   // Try with hash and identifier
   for (const field of ['hash', 'identifier']) {
@@ -583,12 +586,12 @@ export async function getTransaction(txHash: string, network?: string) {
   throw new Error('Transaction not found');
 }
 
-export async function getTransactionHistory(seed: string, network?: string) {
-  const cfg = useNetwork(network);
-  const { ctx, cached } = await getWalletCtx(seed, cfg);
+export async function getTransactionHistory(seed: string) {
+  const cfg = activeNetwork();
+  const { ctx, cached } = await getWalletCtx(seed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
-    const info = getWalletInfo(seed, network);
+    const info = getWalletInfo(seed);
     const myAddress = info.unshieldedAddress;
 
     // Group UTXOs by intentHash (= transactions affecting this wallet)
@@ -672,13 +675,13 @@ export async function createCollection(params: {
   seed?: string;       // Optional: if null, a new wallet is generated
   collection: string;
   symbol: string;
-  network?: string;
+
 }) {
-  const cfg = useNetwork(params.network);
+  const cfg = activeNetwork();
 
   // Generate seed or use existing one
   const seed = params.seed || Buffer.from(generateRandomSeed()).toString('hex');
-  const walletInfo = getWalletInfo(seed, params.network);
+  const walletInfo = getWalletInfo(seed);
 
   const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
   const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
@@ -686,7 +689,7 @@ export async function createCollection(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const { ctx, cached } = await getWalletCtx(seed, cfg);
+  const { ctx, cached } = await getWalletCtx(seed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
@@ -737,9 +740,9 @@ export async function mintNft(params: {
   toShieldedAddress?: string;
   collection?: string;       // only when creating a new collection
   symbol?: string;           // only when creating a new collection
-  network?: string;
+
 }) {
-  const cfg = useNetwork(params.network);
+  const cfg = activeNetwork();
 
   // If no contractAddress -> automatically create a new collection
   if (!params.contractAddress) {
@@ -750,7 +753,6 @@ export async function mintNft(params: {
       uri: params.uri,
       collection: params.collection || 'MidnightNFT',
       symbol: params.symbol || 'MNFT',
-      network: params.network,
     });
     return { ...result, newCollection: true };
   }
@@ -764,7 +766,7 @@ export async function mintNft(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const { ctx, cached } = await getWalletCtx(params.ownerSeed, cfg);
+  const { ctx, cached } = await getWalletCtx(params.ownerSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
@@ -819,9 +821,9 @@ export async function transferNft(params: {
   tokenId: string;
   toCoinPublicKey?: string;
   toShieldedAddress?: string;
-  network?: string;
+
 }) {
-  const cfg = useNetwork(params.network);
+  const cfg = activeNetwork();
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
   if (!resolvedTo) throw new Error('Either toCoinPublicKey or toShieldedAddress is required');
 
@@ -831,7 +833,7 @@ export async function transferNft(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const { ctx, cached } = await getWalletCtx(params.ownerSeed, cfg);
+  const { ctx, cached } = await getWalletCtx(params.ownerSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();

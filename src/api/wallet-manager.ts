@@ -1,5 +1,6 @@
 // =============================================================
 // Wallet Manager — persistent wallet connections with live sync
+// One instance = one network (set via MIDNIGHT_NETWORK env var)
 // =============================================================
 
 import { WebSocket } from 'ws';
@@ -25,7 +26,7 @@ import * as Rx from 'rxjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type NetworkConfig, getNetwork } from './networks.js';
+import { type NetworkConfig, ACTIVE_NETWORK } from './networks.js';
 
 // @ts-expect-error: Needed for GraphQL subscriptions
 globalThis.WebSocket = WebSocket;
@@ -37,7 +38,6 @@ const WATCH_FILE = path.resolve(__dirname, '../../watched-wallets.json');
 
 export interface WatchedWalletInfo {
   seed: string;
-  network: string;
   label?: string;
   addedAt: string;
 }
@@ -61,7 +61,7 @@ interface ManagedWallet {
   };
 }
 
-// ---- Key Derivation ----
+// ---- Helpers ----
 
 function deriveKeysFromSeed(seed: string) {
   const hdWallet = HDWallet.fromSeed(Buffer.from(seed, 'hex'));
@@ -91,19 +91,16 @@ function getAddresses(seed: string, networkId: string) {
 // ---- Wallet Manager Singleton ----
 
 class WalletManager {
-  private wallets = new Map<string, ManagedWallet>(); // key = seed:network
+  private wallets = new Map<string, ManagedWallet>();
   private subscriptions = new Map<string, Rx.Subscription>();
 
-  private key(seed: string, network: string) { return `${seed}:${network}`; }
-
-  // Load watched wallets from disk and connect them
   async initialize() {
     const saved = this.loadFromDisk();
     console.log(`[WalletManager] Loading ${saved.length} watched wallet(s)...`);
     for (const info of saved) {
       try {
         await this.connect(info);
-        console.log(`[WalletManager] Connected: ${info.label || info.seed.substring(0, 12)}... (${info.network})`);
+        console.log(`[WalletManager] Connected: ${info.label || info.seed.substring(0, 12)}...`);
       } catch (err: any) {
         console.error(`[WalletManager] Failed to connect ${info.seed.substring(0, 12)}...: ${err.message}`);
       }
@@ -111,67 +108,47 @@ class WalletManager {
     console.log(`[WalletManager] ${this.wallets.size} wallet(s) active.`);
   }
 
-  // Add a wallet to watch
-  async add(seed: string, network: string, label?: string): Promise<ManagedWallet> {
-    const k = this.key(seed, network);
-    if (this.wallets.has(k)) {
-      return this.wallets.get(k)!;
-    }
+  async add(seed: string, label?: string): Promise<ManagedWallet> {
+    if (this.wallets.has(seed)) return this.wallets.get(seed)!;
 
-    const info: WatchedWalletInfo = {
-      seed,
-      network,
-      label,
-      addedAt: new Date().toISOString(),
-    };
-
+    const info: WatchedWalletInfo = { seed, label, addedAt: new Date().toISOString() };
     const managed = await this.connect(info);
     this.saveToDisk();
     return managed;
   }
 
-  // Remove a wallet from watch
-  async remove(seed: string, network: string): Promise<boolean> {
-    const k = this.key(seed, network);
-    const managed = this.wallets.get(k);
+  async remove(seed: string): Promise<boolean> {
+    const managed = this.wallets.get(seed);
     if (!managed) return false;
 
-    // Stop subscription
-    const sub = this.subscriptions.get(k);
-    if (sub) { sub.unsubscribe(); this.subscriptions.delete(k); }
+    const sub = this.subscriptions.get(seed);
+    if (sub) { sub.unsubscribe(); this.subscriptions.delete(seed); }
 
-    // Stop wallet
     try { await managed.ctx.facade.stop(); } catch {}
 
-    this.wallets.delete(k);
+    this.wallets.delete(seed);
     this.saveToDisk();
     return true;
   }
 
-  // Get a managed wallet (or null)
-  get(seed: string, network: string): ManagedWallet | null {
-    return this.wallets.get(this.key(seed, network)) || null;
+  get(seed: string): ManagedWallet | null {
+    return this.wallets.get(seed) || null;
   }
 
-  // Get wallet context for a seed — uses cached if available, otherwise creates temporary
-  async getOrCreateContext(seed: string, cfg: NetworkConfig): Promise<{ ctx: WalletContext; cached: boolean }> {
-    const managed = this.get(seed, cfg.networkId);
+  async getOrCreateContext(seed: string): Promise<{ ctx: WalletContext; cached: boolean }> {
+    const managed = this.get(seed);
     if (managed && managed.synced) {
       return { ctx: managed.ctx, cached: true };
     }
 
     // Not watched — create temporary wallet
-    const ctx = await this.createWalletContext(seed, cfg);
-
-    // Wait for sync
+    const ctx = await this.createWalletContext(seed);
     await Rx.firstValueFrom(
       ctx.facade.state().pipe(Rx.throttleTime(5_000), Rx.filter((s: any) => s.isSynced)),
     );
-
     return { ctx, cached: false };
   }
 
-  // List all watched wallets with current state
   list(): any[] {
     return Array.from(this.wallets.values()).map(m => {
       const nightBalance = m.lastState?.unshielded?.balances?.[unshieldedToken().raw] ?? 0n;
@@ -188,7 +165,6 @@ class WalletManager {
 
       return {
         label: m.info.label,
-        network: m.info.network,
         synced: m.synced,
         addedAt: m.info.addedAt,
         ...m.addresses,
@@ -207,26 +183,18 @@ class WalletManager {
   // ---- Internal ----
 
   private async connect(info: WatchedWalletInfo): Promise<ManagedWallet> {
-    const k = this.key(info.seed, info.network);
-    const cfg = getNetwork(info.network);
+    const cfg = ACTIVE_NETWORK;
     setNetworkId(cfg.networkId as any);
 
     const addresses = getAddresses(info.seed, cfg.networkId);
-    const ctx = await this.createWalletContext(info.seed, cfg);
+    const ctx = await this.createWalletContext(info.seed);
 
     const managed: ManagedWallet = {
-      info,
-      ctx,
-      synced: false,
-      lastState: null,
-      addresses,
+      info, ctx, synced: false, lastState: null, addresses,
     };
-    this.wallets.set(k, managed);
+    this.wallets.set(info.seed, managed);
 
-    // Subscribe to state updates (live sync)
-    const sub = ctx.facade.state().pipe(
-      Rx.throttleTime(3_000),
-    ).subscribe({
+    const sub = ctx.facade.state().pipe(Rx.throttleTime(3_000)).subscribe({
       next: (state: any) => {
         managed.lastState = state;
         managed.synced = state.isSynced === true;
@@ -236,13 +204,15 @@ class WalletManager {
         managed.synced = false;
       },
     });
-    this.subscriptions.set(k, sub);
+    this.subscriptions.set(info.seed, sub);
 
-    // Don't wait for sync — it happens in background via the subscription
     return managed;
   }
 
-  private async createWalletContext(seed: string, cfg: NetworkConfig): Promise<WalletContext> {
+  private async createWalletContext(seed: string): Promise<WalletContext> {
+    const cfg = ACTIVE_NETWORK;
+    setNetworkId(cfg.networkId as any);
+
     const keys = deriveKeysFromSeed(seed);
     const networkId = getNetworkId();
     const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
@@ -270,7 +240,9 @@ class WalletManager {
   private loadFromDisk(): WatchedWalletInfo[] {
     try {
       if (fs.existsSync(WATCH_FILE)) {
-        return JSON.parse(fs.readFileSync(WATCH_FILE, 'utf-8'));
+        const raw = JSON.parse(fs.readFileSync(WATCH_FILE, 'utf-8'));
+        // Strip legacy `network` field if present
+        return raw.map((w: any) => ({ seed: w.seed, label: w.label, addedAt: w.addedAt }));
       }
     } catch {}
     return [];
@@ -288,7 +260,6 @@ class WalletManager {
 
 interface WatchedAddress {
   address: string;
-  network: string;
   label?: string;
   addedAt: string;
   lastBalance: any;
@@ -300,52 +271,34 @@ const ADDRESS_WATCH_FILE = path.resolve(__dirname, '../../watched-addresses.json
 class AddressWatcher {
   private addresses = new Map<string, WatchedAddress>();
   private pollInterval: ReturnType<typeof setInterval> | null = null;
-  private pollIntervalMs = 30_000; // 30 seconds
-
-  private key(address: string, network: string) { return `${address}:${network}`; }
+  private pollIntervalMs = 30_000;
 
   initialize() {
     const saved = this.loadFromDisk();
-    for (const entry of saved) {
-      this.addresses.set(this.key(entry.address, entry.network), entry);
-    }
+    for (const entry of saved) this.addresses.set(entry.address, entry);
     console.log(`[AddressWatcher] Loaded ${this.addresses.size} watched address(es).`);
-
-    if (this.addresses.size > 0) {
-      this.startPolling();
-    }
+    if (this.addresses.size > 0) this.startPolling();
   }
 
-  add(address: string, network: string, label?: string): WatchedAddress {
-    const k = this.key(address, network);
-    if (this.addresses.has(k)) {
-      return this.addresses.get(k)!;
-    }
+  add(address: string, label?: string): WatchedAddress {
+    if (this.addresses.has(address)) return this.addresses.get(address)!;
 
     const entry: WatchedAddress = {
-      address,
-      network,
-      label,
-      addedAt: new Date().toISOString(),
-      lastBalance: null,
-      lastChecked: null,
+      address, label, addedAt: new Date().toISOString(),
+      lastBalance: null, lastChecked: null,
     };
-    this.addresses.set(k, entry);
+    this.addresses.set(address, entry);
     this.saveToDisk();
 
-    // Start polling if not already running
     if (!this.pollInterval) this.startPolling();
-
-    // Immediately poll this address
     this.pollAddress(entry).catch(() => {});
 
     return entry;
   }
 
-  remove(address: string, network: string): boolean {
-    const k = this.key(address, network);
-    if (!this.addresses.has(k)) return false;
-    this.addresses.delete(k);
+  remove(address: string): boolean {
+    if (!this.addresses.has(address)) return false;
+    this.addresses.delete(address);
     this.saveToDisk();
 
     if (this.addresses.size === 0 && this.pollInterval) {
@@ -353,11 +306,6 @@ class AddressWatcher {
       this.pollInterval = null;
     }
     return true;
-  }
-
-  // Get cached balance for an address (instant)
-  getBalance(address: string, network: string): WatchedAddress | null {
-    return this.addresses.get(this.key(address, network)) || null;
   }
 
   list(): WatchedAddress[] {
@@ -368,7 +316,6 @@ class AddressWatcher {
     if (this.pollInterval) return;
     console.log(`[AddressWatcher] Starting poll every ${this.pollIntervalMs / 1000}s...`);
     this.pollInterval = setInterval(() => this.pollAll(), this.pollIntervalMs);
-    // Poll immediately on start
     this.pollAll();
   }
 
@@ -384,9 +331,7 @@ class AddressWatcher {
       const { promisify } = await import('node:util');
       const execFileAsync = promisify(execFile);
 
-      const args = ['balance', entry.address, '--json'];
-      if (entry.network) args.push('--network', entry.network);
-
+      const args = ['balance', entry.address, '--json', '--network', ACTIVE_NETWORK.networkId];
       const { stdout } = await execFileAsync('midnight', args, { timeout: 30_000 });
       const result = JSON.parse(stdout.trim());
 
@@ -396,28 +341,27 @@ class AddressWatcher {
         txCount: result.txCount,
       };
       entry.lastChecked = new Date().toISOString();
-    } catch (err: any) {
+    } catch {
       entry.lastChecked = new Date().toISOString();
-      // Keep last known balance, just update timestamp
     }
   }
 
   private loadFromDisk(): WatchedAddress[] {
     try {
       if (fs.existsSync(ADDRESS_WATCH_FILE)) {
-        return JSON.parse(fs.readFileSync(ADDRESS_WATCH_FILE, 'utf-8'));
+        const raw = JSON.parse(fs.readFileSync(ADDRESS_WATCH_FILE, 'utf-8'));
+        return raw.map((a: any) => ({ ...a, lastBalance: null, lastChecked: null }));
       }
     } catch {}
     return [];
   }
 
   private saveToDisk() {
-    const data = Array.from(this.addresses.values()).map(({ address, network, label, addedAt }) =>
-      ({ address, network, label, addedAt }));
+    const data = Array.from(this.addresses.values()).map(({ address, label, addedAt }) =>
+      ({ address, label, addedAt }));
     fs.writeFileSync(ADDRESS_WATCH_FILE, JSON.stringify(data, null, 2));
   }
 }
 
-// Singleton instances
 export const walletManager = new WalletManager();
 export const addressWatcher = new AddressWatcher();
