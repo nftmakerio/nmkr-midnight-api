@@ -36,6 +36,42 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ---- Request Logger ----
+// Logs all API calls with method, path, status, duration, and request body
+// (secrets like seeds are masked).
+
+function maskSecrets(obj: any): any {
+  if (!obj || typeof obj !== 'object') return obj;
+  const sensitiveKeys = ['seed', 'senderSeed', 'ownerSeed', 'dustSeed', 'mnemonic'];
+  const clone: any = Array.isArray(obj) ? [...obj] : { ...obj };
+  for (const key of Object.keys(clone)) {
+    if (sensitiveKeys.includes(key) && typeof clone[key] === 'string') {
+      clone[key] = clone[key].substring(0, 8) + '...';
+    } else if (typeof clone[key] === 'object') {
+      clone[key] = maskSecrets(clone[key]);
+    }
+  }
+  return clone;
+}
+
+app.use((req, res, next) => {
+  const start = Date.now();
+  const bodyPreview = Object.keys(req.body || {}).length > 0
+    ? ` body=${JSON.stringify(maskSecrets(req.body))}`
+    : '';
+  const queryPreview = Object.keys(req.query || {}).length > 0
+    ? ` query=${JSON.stringify(req.query)}`
+    : '';
+
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    const ts = new Date().toISOString();
+    console.log(`[${ts}] ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)${bodyPreview}${queryPreview}`);
+  });
+
+  next();
+});
+
 // ---- Swagger ----
 
 const swaggerSpec: any = swaggerJsdoc({
