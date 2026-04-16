@@ -1,5 +1,14 @@
 // =============================================================
 // Wallet Manager — persistent wallet connections with live sync
+//
+// Features:
+//   - Auto-reconnect on connection loss (up to 3 retries, then periodic)
+//   - Activity tracking: lastAccessed timestamp updated on every query
+//   - Auto-suspend: disconnects wallets idle for >15 min (saves resources)
+//   - Auto-resume: re-connects suspended wallets when queried again
+//   - Auto-purge: permanently removes wallets not accessed for 14 days
+//   - Housekeeping runs every 60 seconds
+//
 // One instance = one network (set via MIDNIGHT_NETWORK env var)
 // =============================================================
 
@@ -33,6 +42,14 @@ globalThis.WebSocket = WebSocket;
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WATCH_FILE = path.resolve(__dirname, '../../watched-wallets.json');
+const ADDRESS_WATCH_FILE = path.resolve(__dirname, '../../watched-addresses.json');
+
+// Timings
+const IDLE_SUSPEND_MS = 15 * 60 * 1000;       // 15 min -> suspend (disconnect WebSocket)
+const PURGE_AFTER_MS = 14 * 24 * 60 * 60 * 1000; // 14 days -> permanent removal
+const HOUSEKEEPING_MS = 60 * 1000;             // run housekeeping every 60s
+const RECONNECT_DELAY_MS = 10_000;             // wait 10s before reconnect attempt
+const MAX_RECONNECT_RETRIES = 3;               // retry 3 times, then wait for housekeeping
 
 // ---- Types ----
 
@@ -40,6 +57,7 @@ export interface WatchedWalletInfo {
   seed: string;
   label?: string;
   addedAt: string;
+  lastAccessed: string;   // updated on every query / getOrCreateContext
 }
 
 export interface WalletContext {
@@ -49,11 +67,15 @@ export interface WalletContext {
   unshieldedKeystore: UnshieldedKeystore;
 }
 
+type WalletStatus = 'active' | 'suspended' | 'reconnecting';
+
 interface ManagedWallet {
   info: WatchedWalletInfo;
-  ctx: WalletContext;
+  ctx: WalletContext | null;   // null when suspended
+  status: WalletStatus;
   synced: boolean;
   lastState: any;
+  reconnectAttempts: number;
   addresses: {
     coinPublicKey: string;
     shieldedAddress: string;
@@ -88,30 +110,60 @@ function getAddresses(seed: string, networkId: string) {
   };
 }
 
-// ---- Wallet Manager Singleton ----
+const isSynced = (s: any) =>
+  s.isSynced === true ||
+  s.shielded?.progress?.isStrictlyComplete === true ||
+  s.shielded?.progress?.isCompleteWithin === true;
+
+// ================================================================
+// Wallet Manager
+// ================================================================
 
 class WalletManager {
   private wallets = new Map<string, ManagedWallet>();
   private subscriptions = new Map<string, Rx.Subscription>();
+  private housekeepingInterval: ReturnType<typeof setInterval> | null = null;
 
   async initialize() {
     const saved = this.loadFromDisk();
     console.log(`[WalletManager] Loading ${saved.length} watched wallet(s)...`);
     for (const info of saved) {
-      try {
-        await this.connect(info);
-        console.log(`[WalletManager] Connected: ${info.label || info.seed.substring(0, 12)}...`);
-      } catch (err: any) {
-        console.error(`[WalletManager] Failed to connect ${info.seed.substring(0, 12)}...: ${err.message}`);
+      // Only connect if recently accessed (< 15 min), otherwise start suspended
+      const lastAccess = new Date(info.lastAccessed).getTime();
+      const idle = Date.now() - lastAccess;
+      if (idle < IDLE_SUSPEND_MS) {
+        try {
+          await this.connect(info);
+          console.log(`[WalletManager] Connected: ${info.label || info.seed.substring(0, 12)}...`);
+        } catch (err: any) {
+          console.error(`[WalletManager] Failed: ${info.seed.substring(0, 12)}...: ${err.message}`);
+          this.addSuspended(info);
+        }
+      } else {
+        this.addSuspended(info);
+        console.log(`[WalletManager] Suspended (idle ${Math.round(idle / 60000)}min): ${info.label || info.seed.substring(0, 12)}...`);
       }
     }
-    console.log(`[WalletManager] ${this.wallets.size} wallet(s) active.`);
+    console.log(`[WalletManager] ${this.wallets.size} wallet(s) loaded (${this.activeCount()} active, ${this.suspendedCount()} suspended).`);
+
+    // Start housekeeping
+    this.housekeepingInterval = setInterval(() => this.housekeep(), HOUSEKEEPING_MS);
   }
 
   async add(seed: string, label?: string): Promise<ManagedWallet> {
-    if (this.wallets.has(seed)) return this.wallets.get(seed)!;
+    const existing = this.wallets.get(seed);
+    if (existing) {
+      existing.info.lastAccessed = new Date().toISOString();
+      // Resume if suspended
+      if (existing.status === 'suspended') {
+        await this.resume(existing);
+      }
+      this.saveToDisk();
+      return existing;
+    }
 
-    const info: WatchedWalletInfo = { seed, label, addedAt: new Date().toISOString() };
+    const now = new Date().toISOString();
+    const info: WatchedWalletInfo = { seed, label, addedAt: now, lastAccessed: now };
     const managed = await this.connect(info);
     this.saveToDisk();
     return managed;
@@ -120,12 +172,7 @@ class WalletManager {
   async remove(seed: string): Promise<boolean> {
     const managed = this.wallets.get(seed);
     if (!managed) return false;
-
-    const sub = this.subscriptions.get(seed);
-    if (sub) { sub.unsubscribe(); this.subscriptions.delete(seed); }
-
-    try { await managed.ctx.facade.stop(); } catch {}
-
+    await this.disconnect(seed);
     this.wallets.delete(seed);
     this.saveToDisk();
     return true;
@@ -135,7 +182,6 @@ class WalletManager {
     return this.wallets.get(seed) || null;
   }
 
-  // Find a watched wallet by any of its addresses (shielded, unshielded, coinPublicKey)
   findByAddress(address: string): ManagedWallet | null {
     for (const m of this.wallets.values()) {
       if (m.addresses.shieldedAddress === address) return m;
@@ -151,19 +197,23 @@ class WalletManager {
     return this.remove(m.info.seed);
   }
 
+  // Called by the service layer on every wallet-using operation.
+  // Updates lastAccessed, resumes if suspended, waits for sync.
   async getOrCreateContext(seed: string): Promise<{ ctx: WalletContext; cached: boolean }> {
-    const isSynced = (s: any) =>
-      s.isSynced === true ||
-      s.shielded?.progress?.isStrictlyComplete === true ||
-      s.shielded?.progress?.isCompleteWithin === true;
-
     const managed = this.get(seed);
     if (managed) {
-      // Wait until the cached wallet has at least reached synced state once
-      await Rx.firstValueFrom(
-        managed.ctx.facade.state().pipe(Rx.filter(isSynced)),
-      );
-      return { ctx: managed.ctx, cached: true };
+      managed.info.lastAccessed = new Date().toISOString();
+
+      // Resume if suspended
+      if (managed.status === 'suspended' || !managed.ctx) {
+        await this.resume(managed);
+      }
+
+      // Wait for sync
+      if (managed.ctx) {
+        await Rx.firstValueFrom(managed.ctx.facade.state().pipe(Rx.filter(isSynced)));
+        return { ctx: managed.ctx, cached: true };
+      }
     }
 
     // Not watched — create temporary wallet
@@ -190,8 +240,10 @@ class WalletManager {
 
       return {
         label: m.info.label,
+        status: m.status,
         synced: m.synced,
         addedAt: m.info.addedAt,
+        lastAccessed: m.info.lastAccessed,
         ...m.addresses,
         balances: {
           night: nightBalance.toString(),
@@ -205,7 +257,7 @@ class WalletManager {
     });
   }
 
-  // ---- Internal ----
+  // ---- Internal: connect / disconnect / suspend / resume ----
 
   private async connect(info: WatchedWalletInfo): Promise<ManagedWallet> {
     const cfg = ACTIVE_NETWORK;
@@ -215,27 +267,144 @@ class WalletManager {
     const ctx = await this.createWalletContext(info.seed);
 
     const managed: ManagedWallet = {
-      info, ctx, synced: false, lastState: null, addresses,
+      info, ctx, status: 'active', synced: false, lastState: null,
+      reconnectAttempts: 0, addresses,
     };
     this.wallets.set(info.seed, managed);
-
-    const sub = ctx.facade.state().pipe(Rx.throttleTime(3_000)).subscribe({
-      next: (state: any) => {
-        managed.lastState = state;
-        managed.synced =
-          state.isSynced === true ||
-          state.shielded?.progress?.isStrictlyComplete === true ||
-          state.shielded?.progress?.isCompleteWithin === true;
-      },
-      error: (err) => {
-        console.error(`[WalletManager] Sync error for ${info.seed.substring(0, 12)}...: ${err.message}`);
-        managed.synced = false;
-      },
-    });
-    this.subscriptions.set(info.seed, sub);
-
+    this.subscribe(managed);
     return managed;
   }
+
+  private addSuspended(info: WatchedWalletInfo) {
+    const addresses = getAddresses(info.seed, ACTIVE_NETWORK.networkId);
+    const managed: ManagedWallet = {
+      info, ctx: null, status: 'suspended', synced: false, lastState: null,
+      reconnectAttempts: 0, addresses,
+    };
+    this.wallets.set(info.seed, managed);
+  }
+
+  private subscribe(managed: ManagedWallet) {
+    if (!managed.ctx) return;
+
+    // Clean up old subscription
+    const oldSub = this.subscriptions.get(managed.info.seed);
+    if (oldSub) oldSub.unsubscribe();
+
+    const sub = managed.ctx.facade.state().pipe(Rx.throttleTime(3_000)).subscribe({
+      next: (state: any) => {
+        managed.lastState = state;
+        managed.synced = isSynced(state);
+        managed.reconnectAttempts = 0; // reset on successful data
+      },
+      error: (err) => {
+        console.error(`[WalletManager] Sync error for ${managed.info.seed.substring(0, 12)}...: ${err.message}`);
+        managed.synced = false;
+        this.attemptReconnect(managed);
+      },
+    });
+    this.subscriptions.set(managed.info.seed, sub);
+  }
+
+  private async attemptReconnect(managed: ManagedWallet) {
+    managed.reconnectAttempts++;
+    if (managed.reconnectAttempts > MAX_RECONNECT_RETRIES) {
+      console.warn(`[WalletManager] Max retries reached for ${managed.info.seed.substring(0, 12)}... — will retry in housekeeping`);
+      managed.status = 'suspended';
+      await this.disconnect(managed.info.seed, false); // don't remove from map
+      return;
+    }
+
+    managed.status = 'reconnecting';
+    console.log(`[WalletManager] Reconnecting ${managed.info.seed.substring(0, 12)}... (attempt ${managed.reconnectAttempts}/${MAX_RECONNECT_RETRIES})`);
+
+    await new Promise(r => setTimeout(r, RECONNECT_DELAY_MS));
+
+    try {
+      await this.disconnect(managed.info.seed, false);
+      const ctx = await this.createWalletContext(managed.info.seed);
+      managed.ctx = ctx;
+      managed.status = 'active';
+      this.subscribe(managed);
+      console.log(`[WalletManager] Reconnected: ${managed.info.seed.substring(0, 12)}...`);
+    } catch (err: any) {
+      console.error(`[WalletManager] Reconnect failed: ${err.message}`);
+      managed.status = 'suspended';
+    }
+  }
+
+  private async resume(managed: ManagedWallet) {
+    console.log(`[WalletManager] Resuming ${managed.info.label || managed.info.seed.substring(0, 12)}...`);
+    try {
+      const ctx = await this.createWalletContext(managed.info.seed);
+      managed.ctx = ctx;
+      managed.status = 'active';
+      managed.reconnectAttempts = 0;
+      this.subscribe(managed);
+    } catch (err: any) {
+      console.error(`[WalletManager] Resume failed: ${err.message}`);
+      managed.status = 'suspended';
+      throw err;
+    }
+  }
+
+  private async disconnect(seed: string, removeFromMap = true) {
+    const sub = this.subscriptions.get(seed);
+    if (sub) { sub.unsubscribe(); this.subscriptions.delete(seed); }
+
+    const managed = this.wallets.get(seed);
+    if (managed?.ctx) {
+      try { await managed.ctx.facade.stop(); } catch {}
+      managed.ctx = null;
+      managed.synced = false;
+    }
+  }
+
+  // ---- Housekeeping: suspend idle, purge stale, reconnect failed ----
+
+  private async housekeep() {
+    const now = Date.now();
+    const toRemove: string[] = [];
+
+    for (const [seed, managed] of this.wallets) {
+      const lastAccess = new Date(managed.info.lastAccessed).getTime();
+      const idleMs = now - lastAccess;
+
+      // Purge: not accessed for 14 days -> permanent removal
+      if (idleMs > PURGE_AFTER_MS) {
+        console.log(`[WalletManager] Purging ${managed.info.label || seed.substring(0, 12)}... (idle ${Math.round(idleMs / 86400000)} days)`);
+        toRemove.push(seed);
+        continue;
+      }
+
+      // Suspend: active but not accessed for 15 min -> disconnect to save resources
+      if (managed.status === 'active' && idleMs > IDLE_SUSPEND_MS) {
+        console.log(`[WalletManager] Suspending ${managed.info.label || seed.substring(0, 12)}... (idle ${Math.round(idleMs / 60000)} min)`);
+        await this.disconnect(seed, false);
+        managed.status = 'suspended';
+      }
+
+      // Retry reconnect for suspended wallets that were recently accessed
+      if (managed.status === 'suspended' && idleMs < IDLE_SUSPEND_MS && !managed.ctx) {
+        console.log(`[WalletManager] Auto-resuming ${managed.info.label || seed.substring(0, 12)}...`);
+        try {
+          await this.resume(managed);
+        } catch {}
+      }
+    }
+
+    for (const seed of toRemove) {
+      await this.disconnect(seed, false);
+      this.wallets.delete(seed);
+    }
+
+    if (toRemove.length > 0) this.saveToDisk();
+  }
+
+  private activeCount() { return [...this.wallets.values()].filter(m => m.status === 'active').length; }
+  private suspendedCount() { return [...this.wallets.values()].filter(m => m.status === 'suspended').length; }
+
+  // ---- Wallet creation ----
 
   private async createWalletContext(seed: string): Promise<WalletContext> {
     const cfg = ACTIVE_NETWORK;
@@ -265,36 +434,47 @@ class WalletManager {
     return { facade, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
   }
 
+  // ---- Persistence ----
+
   private loadFromDisk(): WatchedWalletInfo[] {
     try {
       if (fs.existsSync(WATCH_FILE)) {
         const raw = JSON.parse(fs.readFileSync(WATCH_FILE, 'utf-8'));
-        // Strip legacy `network` field if present
-        return raw.map((w: any) => ({ seed: w.seed, label: w.label, addedAt: w.addedAt }));
+        return raw.map((w: any) => ({
+          seed: w.seed,
+          label: w.label,
+          addedAt: w.addedAt || new Date().toISOString(),
+          lastAccessed: w.lastAccessed || w.addedAt || new Date().toISOString(),
+        }));
       }
     } catch {}
     return [];
   }
 
   private saveToDisk() {
-    const data = Array.from(this.wallets.values()).map(m => m.info);
+    const data = Array.from(this.wallets.values()).map(m => ({
+      seed: m.info.seed,
+      label: m.info.label,
+      addedAt: m.info.addedAt,
+      lastAccessed: m.info.lastAccessed,
+    }));
     fs.writeFileSync(WATCH_FILE, JSON.stringify(data, null, 2));
   }
 }
 
 // ================================================================
 // Address Watch — lightweight CLI-based polling (no seed required)
+// Same activity tracking and auto-purge as WalletManager.
 // ================================================================
 
 interface WatchedAddress {
   address: string;
   label?: string;
   addedAt: string;
+  lastAccessed: string;
   lastBalance: any;
   lastChecked: string | null;
 }
-
-const ADDRESS_WATCH_FILE = path.resolve(__dirname, '../../watched-addresses.json');
 
 class AddressWatcher {
   private addresses = new Map<string, WatchedAddress>();
@@ -309,10 +489,16 @@ class AddressWatcher {
   }
 
   add(address: string, label?: string): WatchedAddress {
-    if (this.addresses.has(address)) return this.addresses.get(address)!;
+    if (this.addresses.has(address)) {
+      const existing = this.addresses.get(address)!;
+      existing.lastAccessed = new Date().toISOString();
+      this.saveToDisk();
+      return existing;
+    }
 
+    const now = new Date().toISOString();
     const entry: WatchedAddress = {
-      address, label, addedAt: new Date().toISOString(),
+      address, label, addedAt: now, lastAccessed: now,
       lastBalance: null, lastChecked: null,
     };
     this.addresses.set(address, entry);
@@ -320,7 +506,6 @@ class AddressWatcher {
 
     if (!this.pollInterval) this.startPolling();
     this.pollAddress(entry).catch(() => {});
-
     return entry;
   }
 
@@ -328,7 +513,6 @@ class AddressWatcher {
     if (!this.addresses.has(address)) return false;
     this.addresses.delete(address);
     this.saveToDisk();
-
     if (this.addresses.size === 0 && this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
@@ -336,21 +520,55 @@ class AddressWatcher {
     return true;
   }
 
-  list(): WatchedAddress[] {
-    return Array.from(this.addresses.values());
+  // Mark as accessed (called when balance is queried for this address)
+  touch(address: string) {
+    const entry = this.addresses.get(address);
+    if (entry) {
+      entry.lastAccessed = new Date().toISOString();
+    }
+  }
+
+  list(): any[] {
+    return Array.from(this.addresses.values()).map(e => ({
+      address: e.address,
+      label: e.label,
+      addedAt: e.addedAt,
+      lastAccessed: e.lastAccessed,
+      lastBalance: e.lastBalance,
+      lastChecked: e.lastChecked,
+    }));
   }
 
   private startPolling() {
     if (this.pollInterval) return;
     console.log(`[AddressWatcher] Starting poll every ${this.pollIntervalMs / 1000}s...`);
-    this.pollInterval = setInterval(() => this.pollAll(), this.pollIntervalMs);
-    this.pollAll();
+    this.pollInterval = setInterval(() => this.pollAllAndPurge(), this.pollIntervalMs);
+    this.pollAllAndPurge();
   }
 
-  private async pollAll() {
-    for (const entry of this.addresses.values()) {
-      await this.pollAddress(entry).catch(() => {});
+  private async pollAllAndPurge() {
+    const now = Date.now();
+    const toRemove: string[] = [];
+
+    for (const [address, entry] of this.addresses) {
+      const lastAccess = new Date(entry.lastAccessed).getTime();
+      const idleMs = now - lastAccess;
+
+      // Purge addresses not accessed for 14 days
+      if (idleMs > PURGE_AFTER_MS) {
+        console.log(`[AddressWatcher] Purging ${address.substring(0, 30)}... (idle ${Math.round(idleMs / 86400000)} days)`);
+        toRemove.push(address);
+        continue;
+      }
+
+      // Only poll addresses accessed in the last 15 min
+      if (idleMs < IDLE_SUSPEND_MS) {
+        await this.pollAddress(entry).catch(() => {});
+      }
     }
+
+    for (const addr of toRemove) this.addresses.delete(addr);
+    if (toRemove.length > 0) this.saveToDisk();
   }
 
   private async pollAddress(entry: WatchedAddress) {
@@ -378,15 +596,23 @@ class AddressWatcher {
     try {
       if (fs.existsSync(ADDRESS_WATCH_FILE)) {
         const raw = JSON.parse(fs.readFileSync(ADDRESS_WATCH_FILE, 'utf-8'));
-        return raw.map((a: any) => ({ ...a, lastBalance: null, lastChecked: null }));
+        return raw.map((a: any) => ({
+          address: a.address,
+          label: a.label,
+          addedAt: a.addedAt || new Date().toISOString(),
+          lastAccessed: a.lastAccessed || a.addedAt || new Date().toISOString(),
+          lastBalance: null,
+          lastChecked: null,
+        }));
       }
     } catch {}
     return [];
   }
 
   private saveToDisk() {
-    const data = Array.from(this.addresses.values()).map(({ address, label, addedAt }) =>
-      ({ address, label, addedAt }));
+    const data = Array.from(this.addresses.values()).map(
+      ({ address, label, addedAt, lastAccessed }) => ({ address, label, addedAt, lastAccessed }),
+    );
     fs.writeFileSync(ADDRESS_WATCH_FILE, JSON.stringify(data, null, 2));
   }
 }
