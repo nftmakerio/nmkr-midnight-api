@@ -282,12 +282,16 @@ function getDustBalance(dustState: any): { dustRaw: string; dustFormatted: strin
   };
 }
 
-export async function getBalanceBySeed(seed: string) {
+// Accepts a seed OR an address (if the address is in the watch list,
+// the stored seed is used automatically).
+export async function getBalanceBySeed(seedOrAddress: string) {
   const cfg = activeNetwork();
-  return withWallet(seed, cfg, async (_ctx, state) => {
+  // Resolve address to seed if watched
+  const resolvedSeed = walletManager.getSeedForAddress(seedOrAddress) || seedOrAddress;
+  return withWallet(resolvedSeed, cfg, async (_ctx, state) => {
     const nightBalance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
     const dust = getDustBalance(state.dust);
-    const info = getWalletInfo(seed);
+    const info = getWalletInfo(resolvedSeed);
     return {
       ...info,
       balances: {
@@ -373,9 +377,10 @@ export async function transferNight(params: {
   }
 }
 
-export async function registerDust(seed: string) {
+export async function registerDust(seedOrAddress: string) {
   const cfg = activeNetwork();
-  const { ctx, cached } = await getWalletCtx(seed);
+  const resolvedSeed = walletManager.getSeedForAddress(seedOrAddress) || seedOrAddress;
+  const { ctx, cached } = await getWalletCtx(resolvedSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const nightBalance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
@@ -602,10 +607,11 @@ export async function queryNftContract(contractAddress: string) {
   };
 }
 
-export async function getUtxos(seed: string) {
+export async function getUtxos(seedOrAddress: string) {
   const cfg = activeNetwork();
-  return withWallet(seed, cfg, async (_ctx, state) => {
-    const info = getWalletInfo(seed);
+  const resolvedSeed = walletManager.getSeedForAddress(seedOrAddress) || seedOrAddress;
+  return withWallet(resolvedSeed, cfg, async (_ctx, state) => {
+    const info = getWalletInfo(resolvedSeed);
     const utxos = state.unshielded.availableCoins.map((coin: any, i: number) => ({
       index: i,
       value: coin.utxo.value?.toString(),
@@ -668,12 +674,13 @@ export async function getTransaction(txHash: string) {
   throw new Error('Transaction not found');
 }
 
-export async function getTransactionHistory(seed: string) {
+export async function getTransactionHistory(seedOrAddress: string) {
   const cfg = activeNetwork();
-  const { ctx, cached } = await getWalletCtx(seed);
+  const resolvedSeed = walletManager.getSeedForAddress(seedOrAddress) || seedOrAddress;
+  const { ctx, cached } = await getWalletCtx(resolvedSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
-    const info = getWalletInfo(seed);
+    const info = getWalletInfo(resolvedSeed);
     const myAddress = info.unshieldedAddress;
 
     // Group UTXOs by intentHash (= transactions affecting this wallet)

@@ -120,7 +120,8 @@ const isSynced = (s: any) =>
 // ================================================================
 
 class WalletManager {
-  private wallets = new Map<string, ManagedWallet>();
+  private wallets = new Map<string, ManagedWallet>();          // key = seed
+  private addressIndex = new Map<string, string>();            // address -> seed (lookup index)
   private subscriptions = new Map<string, Rx.Subscription>();
   private housekeepingInterval: ReturnType<typeof setInterval> | null = null;
 
@@ -151,15 +152,23 @@ class WalletManager {
   }
 
   async add(seed: string, label?: string): Promise<ManagedWallet> {
+    // Check by seed
     const existing = this.wallets.get(seed);
     if (existing) {
       existing.info.lastAccessed = new Date().toISOString();
-      // Resume if suspended
-      if (existing.status === 'suspended') {
-        await this.resume(existing);
-      }
+      if (existing.status === 'suspended') await this.resume(existing);
       this.saveToDisk();
       return existing;
+    }
+
+    // Check by address (same wallet, different seed format?)
+    const addresses = getAddresses(seed, ACTIVE_NETWORK.networkId);
+    const byAddr = this.findByAddress(addresses.unshieldedAddress);
+    if (byAddr) {
+      byAddr.info.lastAccessed = new Date().toISOString();
+      if (byAddr.status === 'suspended') await this.resume(byAddr);
+      this.saveToDisk();
+      return byAddr;
     }
 
     const now = new Date().toISOString();
@@ -172,6 +181,7 @@ class WalletManager {
   async remove(seed: string): Promise<boolean> {
     const managed = this.wallets.get(seed);
     if (!managed) return false;
+    this.unindexAddresses(managed);
     await this.disconnect(seed);
     this.wallets.delete(seed);
     this.saveToDisk();
@@ -183,12 +193,28 @@ class WalletManager {
   }
 
   findByAddress(address: string): ManagedWallet | null {
+    // Fast lookup via index
+    const seed = this.addressIndex.get(address);
+    if (seed) return this.wallets.get(seed) || null;
+    // Fallback: scan
     for (const m of this.wallets.values()) {
       if (m.addresses.shieldedAddress === address) return m;
       if (m.addresses.unshieldedAddress === address) return m;
       if (m.addresses.coinPublicKey === address) return m;
     }
     return null;
+  }
+
+  private indexAddresses(managed: ManagedWallet) {
+    this.addressIndex.set(managed.addresses.unshieldedAddress, managed.info.seed);
+    this.addressIndex.set(managed.addresses.shieldedAddress, managed.info.seed);
+    this.addressIndex.set(managed.addresses.coinPublicKey, managed.info.seed);
+  }
+
+  private unindexAddresses(managed: ManagedWallet) {
+    this.addressIndex.delete(managed.addresses.unshieldedAddress);
+    this.addressIndex.delete(managed.addresses.shieldedAddress);
+    this.addressIndex.delete(managed.addresses.coinPublicKey);
   }
 
   async removeByAddress(address: string): Promise<boolean> {
@@ -198,9 +224,13 @@ class WalletManager {
   }
 
   // Called by the service layer on every wallet-using operation.
+  // Accepts a seed OR an address. If an address is given and it's in the
+  // watch list, the stored seed is used automatically.
   // Updates lastAccessed, resumes if suspended, waits for sync.
-  async getOrCreateContext(seed: string): Promise<{ ctx: WalletContext; cached: boolean }> {
-    const managed = this.get(seed);
+  async getOrCreateContext(seedOrAddress: string): Promise<{ ctx: WalletContext; cached: boolean }> {
+    // Try direct seed lookup first, then address lookup
+    let managed = this.get(seedOrAddress) || this.findByAddress(seedOrAddress);
+
     if (managed) {
       managed.info.lastAccessed = new Date().toISOString();
 
@@ -216,12 +246,18 @@ class WalletManager {
       }
     }
 
-    // Not watched — create temporary wallet
-    const ctx = await this.createWalletContext(seed);
+    // Not watched — seedOrAddress must be a seed to create temporary wallet
+    const ctx = await this.createWalletContext(seedOrAddress);
     await Rx.firstValueFrom(
       ctx.facade.state().pipe(Rx.throttleTime(5_000), Rx.filter(isSynced)),
     );
     return { ctx, cached: false };
+  }
+
+  // Get the seed for a watched address (internal use only — never expose via API)
+  getSeedForAddress(address: string): string | null {
+    const managed = this.findByAddress(address);
+    return managed ? managed.info.seed : null;
   }
 
   list(): any[] {
@@ -271,6 +307,7 @@ class WalletManager {
       reconnectAttempts: 0, addresses,
     };
     this.wallets.set(info.seed, managed);
+    this.indexAddresses(managed);
     this.subscribe(managed);
     return managed;
   }
@@ -282,6 +319,7 @@ class WalletManager {
       reconnectAttempts: 0, addresses,
     };
     this.wallets.set(info.seed, managed);
+    this.indexAddresses(managed);
   }
 
   private subscribe(managed: ManagedWallet) {
@@ -394,6 +432,8 @@ class WalletManager {
     }
 
     for (const seed of toRemove) {
+      const m = this.wallets.get(seed);
+      if (m) this.unindexAddresses(m);
       await this.disconnect(seed, false);
       this.wallets.delete(seed);
     }
