@@ -470,6 +470,7 @@ export async function deployAndMintNft(params: {
   transferable?: boolean;  // default: true
   collectionImage?: string;     // collection-level image (only on new collection)
   collectionMediaType?: string; // collection-level MIME (only on new collection)
+  dustSeed?: string;
 }) {
   const cfg = activeNetwork();
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
@@ -497,6 +498,7 @@ export async function deployAndMintNft(params: {
   );
 
   const { ctx, cached } = await getWalletCtx(params.seed);
+  const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.seed);
   try {
 
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
@@ -506,7 +508,7 @@ export async function deployAndMintNft(params: {
       ? { bytes: Buffer.from(resolvedTo, 'hex') }
       : ownerPubKey;
 
-    const bridge = await createProviderBridge(ctx);
+    const bridge = await createProviderBridge(ctx, dustCtx);
     const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
@@ -551,6 +553,7 @@ export async function deployAndMintNft(params: {
     };
   } finally {
     if (!cached) await ctx.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
   }
 }
 
@@ -757,6 +760,7 @@ export async function createCollection(params: {
   transferable?: boolean;  // default: true
   image?: string;          // optional collection-level image URI
   mediaType?: string;      // optional MIME type for the collection image
+  dustSeed?: string;
 }) {
   const cfg = activeNetwork();
   const transferable = params.transferable !== false;
@@ -779,12 +783,13 @@ export async function createCollection(params: {
   );
 
   const { ctx, cached } = await getWalletCtx(seed);
+  const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, seed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
     const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
 
-    const bridge = await createProviderBridge(ctx);
+    const bridge = await createProviderBridge(ctx, dustCtx);
     const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
@@ -820,6 +825,7 @@ export async function createCollection(params: {
     };
   } finally {
     if (!cached) await ctx.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
   }
 }
 
@@ -837,6 +843,7 @@ export async function mintNft(params: {
   transferable?: boolean;    // only when creating a new collection (default true)
   collectionImage?: string;     // only when creating a new collection
   collectionMediaType?: string; // only when creating a new collection
+  dustSeed?: string;
 }) {
   if (!params.name) throw new Error('name is required');
   const cfg = activeNetwork();
@@ -861,6 +868,7 @@ export async function mintNft(params: {
       transferable: params.transferable,
       collectionImage: params.collectionImage,
       collectionMediaType: params.collectionMediaType,
+      dustSeed: params.dustSeed,
     });
     return { ...result, newCollection: true };
   }
@@ -875,6 +883,7 @@ export async function mintNft(params: {
   );
 
   const { ctx, cached } = await getWalletCtx(params.ownerSeed);
+  const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.ownerSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
@@ -883,7 +892,7 @@ export async function mintNft(params: {
       ? { bytes: Buffer.from(resolvedTo, 'hex') }
       : ownerPubKey;
 
-    const bridge = await createProviderBridge(ctx);
+    const bridge = await createProviderBridge(ctx, dustCtx);
     const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
 
     const { findDeployedContract } = await import('@midnight-ntwrk/midnight-js-contracts');
@@ -925,6 +934,7 @@ export async function mintNft(params: {
     };
   } finally {
     if (!cached) await ctx.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
   }
 }
 
@@ -934,7 +944,7 @@ export async function transferNft(params: {
   tokenId: string;
   toCoinPublicKey?: string;
   toShieldedAddress?: string;
-
+  dustSeed?: string;
 }) {
   const cfg = activeNetwork();
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
@@ -947,11 +957,12 @@ export async function transferNft(params: {
   );
 
   const { ctx, cached } = await getWalletCtx(params.ownerSeed);
+  const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.ownerSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
 
-    const bridge = await createProviderBridge(ctx);
+    const bridge = await createProviderBridge(ctx, dustCtx);
     const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
 
     const { findDeployedContract } = await import('@midnight-ntwrk/midnight-js-contracts');
@@ -990,6 +1001,7 @@ export async function transferNft(params: {
     };
   } finally {
     if (!cached) await ctx.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
   }
 }
 
@@ -1003,6 +1015,7 @@ async function callContract<T>(
   ownerSeed: string,
   contractAddress: string,
   fn: (contract: any) => Promise<T>,
+  dustSeed?: string,
 ): Promise<{ result: T; coinPublicKey: string }> {
   const cfg = activeNetwork();
   const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
@@ -1012,11 +1025,12 @@ async function callContract<T>(
   );
 
   const { ctx, cached } = await getWalletCtx(ownerSeed);
+  const { dustCtx, dustCached } = await resolveDustCtx(dustSeed, ownerSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
 
-    const bridge = await createProviderBridge(ctx);
+    const bridge = await createProviderBridge(ctx, dustCtx);
     const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
     const { findDeployedContract } = await import('@midnight-ntwrk/midnight-js-contracts');
     const providers = {
@@ -1044,6 +1058,7 @@ async function callContract<T>(
     return { result, coinPublicKey };
   } finally {
     if (!cached) await ctx.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
   }
 }
 
@@ -1055,6 +1070,7 @@ export async function approveNft(params: {
   tokenId: string;
   toCoinPublicKey?: string;
   toShieldedAddress?: string;
+  dustSeed?: string;
 }) {
   const cfg = activeNetwork();
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
@@ -1063,7 +1079,7 @@ export async function approveNft(params: {
   const { coinPublicKey } = await callContract(params.ownerSeed, params.contractAddress, async (contract) => {
     const approveTo = { bytes: Buffer.from(resolvedTo, 'hex') };
     return contract.callTx.approve(approveTo, BigInt(params.tokenId));
-  });
+  }, params.dustSeed);
 
   return {
     contractAddress: params.contractAddress,
@@ -1081,6 +1097,7 @@ export async function setApprovalForAllNft(params: {
   operatorCoinPublicKey?: string;
   operatorShieldedAddress?: string;
   approved: boolean;
+  dustSeed?: string;
 }) {
   const cfg = activeNetwork();
   const resolvedOperator = resolveToCoinPublicKey(params.operatorCoinPublicKey, params.operatorShieldedAddress);
@@ -1089,7 +1106,7 @@ export async function setApprovalForAllNft(params: {
   const { coinPublicKey } = await callContract(params.ownerSeed, params.contractAddress, async (contract) => {
     const operator = { bytes: Buffer.from(resolvedOperator, 'hex') };
     return contract.callTx.setApprovalForAll(operator, params.approved);
-  });
+  }, params.dustSeed);
 
   return {
     contractAddress: params.contractAddress,
@@ -1105,11 +1122,12 @@ export async function burnNft(params: {
   ownerSeed: string;
   contractAddress: string;
   tokenId: string;
+  dustSeed?: string;
 }) {
   const cfg = activeNetwork();
   const { coinPublicKey } = await callContract(params.ownerSeed, params.contractAddress, async (contract) => {
     return contract.callTx.burn(BigInt(params.tokenId));
-  });
+  }, params.dustSeed);
 
   return {
     contractAddress: params.contractAddress,
@@ -1121,17 +1139,21 @@ export async function burnNft(params: {
 
 // ---- Provider Bridge (internal) ----
 
-async function createProviderBridge(ctx: WalletContext) {
+// Creates the provider bridge that midnight-js uses for balancing, signing and submitting.
+// If a separate dustCtx is provided, its dust keys are used for fee payment instead of the
+// main wallet's keys. This lets one wallet own/authorize the contract while another pays fees.
+async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext) {
   const state: any = await Rx.firstValueFrom(
     ctx.facade.state().pipe(Rx.filter((s: any) => s.isSynced)),
   );
+  const dustSecretKey = dustCtx ? dustCtx.dustSecretKey : ctx.dustSecretKey;
   return {
     getCoinPublicKey() { return state.shielded.coinPublicKey.toHexString(); },
     getEncryptionPublicKey() { return state.shielded.encryptionPublicKey.toHexString(); },
     async balanceTx(tx: any, ttl?: Date) {
       const recipe = await (ctx.facade as any).balanceUnboundTransaction(
         tx,
-        { shieldedSecretKeys: ctx.shieldedSecretKeys, dustSecretKey: ctx.dustSecretKey },
+        { shieldedSecretKeys: ctx.shieldedSecretKeys, dustSecretKey },
         { ttl: ttl ?? new Date(Date.now() + 30 * 60 * 1000) },
       );
       const signFn = (payload: Uint8Array) => ctx.unshieldedKeystore.signData(payload);
@@ -1140,4 +1162,13 @@ async function createProviderBridge(ctx: WalletContext) {
     },
     submitTx(tx: any) { return ctx.facade.submitTransaction(tx); },
   };
+}
+
+// Helper: resolve optional dustSeed to a WalletContext
+async function resolveDustCtx(dustSeed?: string, ownerSeed?: string): Promise<{ dustCtx: WalletContext | undefined; dustCached: boolean }> {
+  if (dustSeed && dustSeed !== ownerSeed) {
+    const { ctx, cached } = await getWalletCtx(dustSeed);
+    return { dustCtx: ctx, dustCached: cached };
+  }
+  return { dustCtx: undefined, dustCached: true };
 }

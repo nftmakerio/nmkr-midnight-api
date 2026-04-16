@@ -365,6 +365,7 @@ swaggerSpec.paths = {
         seed: { type: 'string', description: 'Optional: seed of the deployer. If empty, a new wallet is generated.' },
         collection: { type: 'string', description: 'Collection name (max 64 chars)', example: 'NMKRMidnightNFT' },
         symbol: { type: 'string', description: 'Collection symbol (max 32 chars)', example: 'NMKR' },
+        dustSeed: { type: 'string', description: 'Optional: separate seed that pays DUST fees' },
         transferable: { type: 'boolean', default: true, description: 'true (default) = standard NFT (owners can transfer/approve). false = soulbound (only mint and burn).' },
         image: { type: 'string', description: 'Optional collection-level image URI (max 128 chars), e.g. ipfs://...' },
         mediaType: { type: 'string', description: 'Optional MIME type (max 64 chars), e.g. image/png' },
@@ -405,6 +406,7 @@ swaggerSpec.paths = {
         transferable: { type: 'boolean', default: true, description: 'Only for new collection: true (default) = standard NFT, false = soulbound' },
         collectionImage: { type: 'string', description: 'Only for new collection: collection-level image URI (max 128 chars)' },
         collectionMediaType: { type: 'string', description: 'Only for new collection: MIME type (max 64 chars)' },
+        dustSeed: { type: 'string', description: 'Optional: separate seed that pays DUST fees' },
       } } } } },
       responses: {
         200: { description: 'NFT minted', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -440,6 +442,7 @@ swaggerSpec.paths = {
         tokenId: { type: 'string', description: 'Token ID to transfer (e.g. "0", "1")', example: '0' },
         toCoinPublicKey: { type: 'string', description: 'Recipient CoinPublicKey (hex)' },
         toShieldedAddress: { type: 'string', description: 'Recipient shielded address (mn_shield-addr_...) — resolved automatically' },
+        dustSeed: { type: 'string', description: 'Optional: separate seed that pays DUST fees' },
       } } } } },
       responses: {
         200: { description: 'NFT transferred', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -463,6 +466,7 @@ swaggerSpec.paths = {
         tokenId: { type: 'string', example: '0' },
         toCoinPublicKey: { type: 'string', description: 'Approved spender (hex CoinPublicKey)' },
         toShieldedAddress: { type: 'string', description: 'Approved spender shielded address — resolved automatically' },
+        dustSeed: { type: 'string', description: 'Optional: separate seed that pays DUST fees' },
       } } } } },
       responses: {
         200: { description: 'Approval set' },
@@ -480,6 +484,7 @@ swaggerSpec.paths = {
         operatorCoinPublicKey: { type: 'string', description: 'Operator CoinPublicKey (hex)' },
         operatorShieldedAddress: { type: 'string', description: 'Operator shielded address — resolved automatically' },
         approved: { type: 'boolean', description: 'true to grant, false to revoke', example: true },
+        dustSeed: { type: 'string', description: 'Optional: separate seed that pays DUST fees' },
       } } } } },
       responses: {
         200: { description: 'Operator approval updated' },
@@ -495,6 +500,7 @@ swaggerSpec.paths = {
         ownerSeed: { type: 'string', description: 'Seed of the current NFT owner' },
         contractAddress: { type: 'string' },
         tokenId: { type: 'string', example: '0' },
+        dustSeed: { type: 'string', description: 'Optional: separate seed that pays DUST fees' },
       } } } } },
       responses: {
         200: { description: 'NFT burned' },
@@ -616,9 +622,9 @@ app.get('/api/transaction/:txHash', async (req, res) => {
 
 app.post('/api/nft/create-collection', async (req, res) => {
   try {
-    const { seed, collection, symbol, transferable, image, mediaType } = req.body;
+    const { seed, collection, symbol, transferable, image, mediaType, dustSeed } = req.body;
     if (!collection || !symbol) return res.status(400).json({ error: 'collection and symbol are required' });
-    res.json(await createCollection({ seed, collection, symbol, transferable, image, mediaType }));
+    res.json(await createCollection({ seed, collection, symbol, transferable, image, mediaType, dustSeed }));
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') ? 400 : 500;
     res.status(status).json({ error: err.message });
@@ -631,12 +637,14 @@ app.post('/api/nft/mint', async (req, res) => {
       ownerSeed, contractAddress, uri, name, image, mediaType,
       toCoinPublicKey, toShieldedAddress,
       collection, symbol, transferable, collectionImage, collectionMediaType,
+      dustSeed,
     } = req.body;
     if (!ownerSeed || !uri || !name) return res.status(400).json({ error: 'ownerSeed, uri and name are required' });
     res.json(await mintNft({
       ownerSeed, contractAddress, uri, name, image, mediaType,
       toCoinPublicKey, toShieldedAddress,
       collection, symbol, transferable, collectionImage, collectionMediaType,
+      dustSeed,
     }));
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
@@ -646,27 +654,27 @@ app.post('/api/nft/mint', async (req, res) => {
 
 app.post('/api/nft/approve', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, tokenId, toCoinPublicKey, toShieldedAddress } = req.body;
+    const { ownerSeed, contractAddress, tokenId, toCoinPublicKey, toShieldedAddress, dustSeed } = req.body;
     if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
     if (!toCoinPublicKey && !toShieldedAddress) return res.status(400).json({ error: 'Either toCoinPublicKey or toShieldedAddress is required' });
-    res.json(await approveNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress }));
+    res.json(await approveNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress, dustSeed }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/nft/approve-for-all', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, operatorCoinPublicKey, operatorShieldedAddress, approved } = req.body;
+    const { ownerSeed, contractAddress, operatorCoinPublicKey, operatorShieldedAddress, approved, dustSeed } = req.body;
     if (!ownerSeed || !contractAddress || approved === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and approved are required' });
     if (!operatorCoinPublicKey && !operatorShieldedAddress) return res.status(400).json({ error: 'Either operatorCoinPublicKey or operatorShieldedAddress is required' });
-    res.json(await setApprovalForAllNft({ ownerSeed, contractAddress, operatorCoinPublicKey, operatorShieldedAddress, approved: Boolean(approved) }));
+    res.json(await setApprovalForAllNft({ ownerSeed, contractAddress, operatorCoinPublicKey, operatorShieldedAddress, approved: Boolean(approved), dustSeed }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/nft/burn', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, tokenId } = req.body;
+    const { ownerSeed, contractAddress, tokenId, dustSeed } = req.body;
     if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
-    res.json(await burnNft({ ownerSeed, contractAddress, tokenId: String(tokenId) }));
+    res.json(await burnNft({ ownerSeed, contractAddress, tokenId: String(tokenId), dustSeed }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
@@ -733,10 +741,10 @@ app.get('/api/watch/list', (_req, res) => {
 
 app.post('/api/nft/transfer', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, tokenId, toCoinPublicKey, toShieldedAddress } = req.body;
+    const { ownerSeed, contractAddress, tokenId, toCoinPublicKey, toShieldedAddress, dustSeed } = req.body;
     if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
     if (!toCoinPublicKey && !toShieldedAddress) return res.status(400).json({ error: 'Either toCoinPublicKey or toShieldedAddress is required' });
-    res.json(await transferNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress }));
+    res.json(await transferNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress, dustSeed }));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
