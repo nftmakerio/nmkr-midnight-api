@@ -110,10 +110,21 @@ function getAddresses(seed: string, networkId: string) {
   };
 }
 
-const isSynced = (s: any) =>
+// Full sync: all components (shielded, unshielded, dust) are complete.
+// Used for operations that need shielded state (mint, transfer, approve).
+const isFullySynced = (s: any) =>
   s.isSynced === true ||
   s.shielded?.progress?.isStrictlyComplete === true ||
   s.shielded?.progress?.isCompleteWithin === true;
+
+// Fast sync: unshielded UTXOs and dust coins are loaded.
+// Sufficient for balance, UTXOs, transactions queries.
+// We use debounceTime in the caller to wait until the state has stabilized
+// (no more rapid-fire updates for at least 3 seconds).
+// This triggers much faster than full sync (seconds vs minutes).
+const isUnshieldedReady = (s: any) =>
+  s.unshielded?.availableCoins !== undefined &&
+  s.dust?.availableCoins !== undefined;
 
 // ================================================================
 // Wallet Manager
@@ -223,35 +234,64 @@ class WalletManager {
     return this.remove(m.info.seed);
   }
 
-  // Called by the service layer on every wallet-using operation.
-  // Accepts a seed OR an address. If an address is given and it's in the
-  // watch list, the stored seed is used automatically.
-  // Updates lastAccessed, resumes if suspended, waits for sync.
+  // Fast context: waits only for unshielded + dust sync (seconds).
+  // Use for read-only operations: balance, UTXOs, transactions.
+  async getOrCreateContextFast(seedOrAddress: string): Promise<{ ctx: WalletContext; cached: boolean }> {
+    return this._getOrCreate(seedOrAddress, isUnshieldedReady, true);
+  }
+
+  // Full context: waits for complete sync including shielded (minutes on first sync).
+  // Use for write operations: mint, transfer, approve, burn.
   async getOrCreateContext(seedOrAddress: string): Promise<{ ctx: WalletContext; cached: boolean }> {
-    // Try direct seed lookup first, then address lookup
+    return this._getOrCreate(seedOrAddress, isFullySynced, false);
+  }
+
+  private async _getOrCreate(
+    seedOrAddress: string,
+    syncCheck: (s: any) => boolean,
+    useDebounce: boolean = false,
+  ): Promise<{ ctx: WalletContext; cached: boolean }> {
     let managed = this.get(seedOrAddress) || this.findByAddress(seedOrAddress);
 
     if (managed) {
       managed.info.lastAccessed = new Date().toISOString();
 
-      // Resume if suspended
       if (managed.status === 'suspended' || !managed.ctx) {
         await this.resume(managed);
       }
 
-      // Wait for sync
       if (managed.ctx) {
-        await Rx.firstValueFrom(managed.ctx.facade.state().pipe(Rx.filter(isSynced)));
+        // If already synced, return immediately (no debounce needed)
+        if (managed.synced) {
+          return { ctx: managed.ctx, cached: true };
+        }
+        await this.waitForSync(managed.ctx, syncCheck, useDebounce);
         return { ctx: managed.ctx, cached: true };
       }
     }
 
     // Not watched — seedOrAddress must be a seed to create temporary wallet
     const ctx = await this.createWalletContext(seedOrAddress);
-    await Rx.firstValueFrom(
-      ctx.facade.state().pipe(Rx.throttleTime(5_000), Rx.filter(isSynced)),
-    );
+    await this.waitForSync(ctx, syncCheck, useDebounce);
     return { ctx, cached: false };
+  }
+
+  // Wait for sync with optional debounce (used for fast mode to let state stabilize)
+  private async waitForSync(ctx: WalletContext, syncCheck: (s: any) => boolean, useDebounce: boolean) {
+    let pipeline = ctx.facade.state().pipe(Rx.filter(syncCheck));
+    if (useDebounce) {
+      // Wait until state matches AND has been stable for 3 seconds
+      pipeline = ctx.facade.state().pipe(
+        Rx.filter(syncCheck),
+        Rx.debounceTime(3_000),
+      );
+    } else {
+      pipeline = ctx.facade.state().pipe(
+        Rx.throttleTime(2_000),
+        Rx.filter(syncCheck),
+      );
+    }
+    await Rx.firstValueFrom(pipeline);
   }
 
   // Get the seed for a watched address (internal use only — never expose via API)
@@ -332,7 +372,7 @@ class WalletManager {
     const sub = managed.ctx.facade.state().pipe(Rx.throttleTime(3_000)).subscribe({
       next: (state: any) => {
         managed.lastState = state;
-        managed.synced = isSynced(state);
+        managed.synced = isFullySynced(state);
         managed.reconnectAttempts = 0; // reset on successful data
       },
       error: (err) => {
@@ -446,7 +486,11 @@ class WalletManager {
 
   // ---- Wallet creation ----
 
-  private async createWalletContext(seed: string): Promise<WalletContext> {
+  // Creates a wallet context. For watched wallets, uses a persistent LevelDB
+  // store keyed by a short hash of the seed so subsequent syncs only load the
+  // delta since the last run (much faster than a full sync every time).
+  // For temporary wallets (not watched), uses InMemoryTransactionHistoryStorage.
+  private async createWalletContext(seed: string, persistent = true): Promise<WalletContext> {
     const cfg = ACTIVE_NETWORK;
     setNetworkId(cfg.networkId as any);
 
@@ -455,6 +499,12 @@ class WalletManager {
     const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
     const dustSecretKey = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
     const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], networkId);
+
+    // Persistent storage: keyed by first 16 chars of seed to avoid collisions
+    // The LevelDB store survives API restarts so only delta-sync is needed.
+    const storeName = persistent
+      ? `wallet-sync-${seed.substring(0, 16)}`
+      : `wallet-tmp-${Date.now()}`;
 
     const walletConfig = {
       networkId,

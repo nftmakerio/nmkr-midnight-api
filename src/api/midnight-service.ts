@@ -65,10 +65,26 @@ function deriveKeysFromSeed(seed: string) {
 }
 
 // ---- Wallet helpers ----
-// Uses WalletManager cache if available, otherwise creates temporary wallet
+// Uses WalletManager cache if available, otherwise creates temporary wallet.
+// "Fast" = only wait for unshielded + dust (seconds). Use for reads.
+// "Full" = wait for complete sync incl. shielded (can take minutes). Use for writes.
 
-async function getWalletCtx(seed: string, _cfg?: NetworkConfig): Promise<{ ctx: WalletContext; cached: boolean }> {
+async function getWalletCtxFast(seedOrAddress: string): Promise<{ ctx: WalletContext; cached: boolean }> {
+  return walletManager.getOrCreateContextFast(seedOrAddress);
+}
+
+async function getWalletCtx(seed: string): Promise<{ ctx: WalletContext; cached: boolean }> {
   return walletManager.getOrCreateContext(seed);
+}
+
+async function withWalletFast<T>(seedOrAddress: string, fn: (ctx: WalletContext, state: any) => Promise<T>): Promise<T> {
+  const { ctx, cached } = await getWalletCtxFast(seedOrAddress);
+  try {
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
+    return await fn(ctx, state);
+  } finally {
+    if (!cached) await ctx.facade.stop();
+  }
 }
 
 async function withWallet<T>(seed: string, cfg: NetworkConfig, fn: (ctx: WalletContext, state: any) => Promise<T>): Promise<T> {
@@ -286,9 +302,8 @@ function getDustBalance(dustState: any): { dustRaw: string; dustFormatted: strin
 // the stored seed is used automatically).
 export async function getBalanceBySeed(seedOrAddress: string) {
   const cfg = activeNetwork();
-  // Resolve address to seed if watched
   const resolvedSeed = walletManager.getSeedForAddress(seedOrAddress) || seedOrAddress;
-  return withWallet(resolvedSeed, cfg, async (_ctx, state) => {
+  return withWalletFast(resolvedSeed, async (_ctx, state) => {
     const nightBalance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
     const dust = getDustBalance(state.dust);
     const info = getWalletInfo(resolvedSeed);
@@ -380,7 +395,7 @@ export async function transferNight(params: {
 export async function registerDust(seedOrAddress: string) {
   const cfg = activeNetwork();
   const resolvedSeed = walletManager.getSeedForAddress(seedOrAddress) || seedOrAddress;
-  const { ctx, cached } = await getWalletCtx(resolvedSeed);
+  const { ctx, cached } = await getWalletCtxFast(resolvedSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const nightBalance = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
@@ -610,7 +625,7 @@ export async function queryNftContract(contractAddress: string) {
 export async function getUtxos(seedOrAddress: string) {
   const cfg = activeNetwork();
   const resolvedSeed = walletManager.getSeedForAddress(seedOrAddress) || seedOrAddress;
-  return withWallet(resolvedSeed, cfg, async (_ctx, state) => {
+  return withWalletFast(resolvedSeed, async (_ctx, state) => {
     const info = getWalletInfo(resolvedSeed);
     const utxos = state.unshielded.availableCoins.map((coin: any, i: number) => ({
       index: i,
@@ -677,7 +692,7 @@ export async function getTransaction(txHash: string) {
 export async function getTransactionHistory(seedOrAddress: string) {
   const cfg = activeNetwork();
   const resolvedSeed = walletManager.getSeedForAddress(seedOrAddress) || seedOrAddress;
-  const { ctx, cached } = await getWalletCtx(resolvedSeed);
+  const { ctx, cached } = await getWalletCtxFast(resolvedSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const info = getWalletInfo(resolvedSeed);
