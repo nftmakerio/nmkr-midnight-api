@@ -45,12 +45,11 @@ const WATCH_FILE = path.resolve(__dirname, '../../watched-wallets.json');
 const ADDRESS_WATCH_FILE = path.resolve(__dirname, '../../watched-addresses.json');
 
 // Timings
-const IDLE_SUSPEND_MS = 60 * 60 * 1000;       // 60 min -> suspend (disconnect WebSocket)
-const PURGE_AFTER_MS = 14 * 24 * 60 * 60 * 1000; // 14 days -> permanent removal
+const PURGE_AFTER_MS = 14 * 24 * 60 * 60 * 1000; // 14 days without access -> permanent removal
 const HOUSEKEEPING_MS = 60 * 1000;             // run housekeeping every 60s
 const RECONNECT_DELAY_MS = 10_000;             // wait 10s before reconnect attempt
 const MAX_RECONNECT_RETRIES = 3;               // retry 3 times, then wait for housekeeping
-const MAX_ACTIVE_WALLETS = 20;                 // max concurrent active WebSocket connections
+const MAX_WATCHED_WALLETS = 20;                // max watched wallets (all always online)
 
 // ---- Types ----
 
@@ -150,13 +149,19 @@ class WalletManager {
     const saved = this.loadFromDisk();
     console.log(`[WalletManager] Loading ${saved.length} watched wallet(s)...`);
 
-    // All wallets start suspended. They will be activated on-demand when queried.
-    // This prevents memory spikes from too many parallel syncs at startup.
+    // Connect all wallets sequentially (not parallel) to avoid memory spikes.
+    // Each wallet uses cached state if available for fast restore (~5s).
     for (const info of saved) {
-      this.addSuspended(info);
-      console.log(`[WalletManager] Registered (suspended): ${info.label || info.seed.substring(0, 12)}...`);
+      try {
+        await this.connect(info);
+        console.log(`[WalletManager] Connected: ${info.label || info.seed.substring(0, 12)}...`);
+      } catch (err: any) {
+        console.error(`[WalletManager] Failed to connect ${info.seed.substring(0, 12)}...: ${err.message}`);
+        // Keep in list but mark as needing reconnect
+        this.addSuspended(info);
+      }
     }
-    console.log(`[WalletManager] ${this.wallets.size} wallet(s) loaded (all suspended, will activate on demand).`);
+    console.log(`[WalletManager] ${this.wallets.size} wallet(s) loaded (${this.activeCount()} active, ${this.suspendedCount()} suspended).`);
 
     // Start housekeeping
     this.housekeepingInterval = setInterval(() => this.housekeep(), HOUSEKEEPING_MS);
@@ -180,6 +185,11 @@ class WalletManager {
       if (byAddr.status === 'suspended') await this.resume(byAddr);
       this.saveToDisk();
       return byAddr;
+    }
+
+    // Check limit
+    if (this.wallets.size >= MAX_WATCHED_WALLETS) {
+      throw new Error(`Maximum ${MAX_WATCHED_WALLETS} watched wallets reached. Remove one first.`);
     }
 
     const now = new Date().toISOString();
@@ -413,17 +423,6 @@ class WalletManager {
   }
 
   private async resume(managed: ManagedWallet) {
-    // If too many active wallets, suspend the least recently accessed one first
-    if (this.activeCount() >= MAX_ACTIVE_WALLETS) {
-      const lru = this.leastRecentlyUsedActive(managed.info.seed);
-      if (lru) {
-        console.log(`[WalletManager] Evicting ${lru.info.label || lru.info.seed.substring(0, 12)}... to make room`);
-        this.serializeWalletState(lru);
-        await this.disconnect(lru.info.seed, false);
-        lru.status = 'suspended';
-      }
-    }
-
     console.log(`[WalletManager] Resuming ${managed.info.label || managed.info.seed.substring(0, 12)}...`);
     try {
       const ctx = await this.createWalletContext(managed.info.seed, managed.serializedState);
@@ -436,18 +435,6 @@ class WalletManager {
       managed.status = 'suspended';
       throw err;
     }
-  }
-
-  // Find the active wallet that was accessed least recently (for eviction)
-  private leastRecentlyUsedActive(excludeSeed: string): ManagedWallet | null {
-    let oldest: ManagedWallet | null = null;
-    let oldestTime = Infinity;
-    for (const m of this.wallets.values()) {
-      if (m.status !== 'active' || m.info.seed === excludeSeed) continue;
-      const t = new Date(m.info.lastAccessed).getTime();
-      if (t < oldestTime) { oldest = m; oldestTime = t; }
-    }
-    return oldest;
   }
 
   private async disconnect(seed: string, removeFromMap = true) {
@@ -467,7 +454,7 @@ class WalletManager {
   // ---- Housekeeping: suspend idle, purge stale, reconnect failed, cache state ----
 
   private async housekeep() {
-    // Periodically serialize active wallets (every housekeeping run)
+    // 1. Cache state of all active synced wallets (for fast restore after restart)
     for (const managed of this.wallets.values()) {
       if (managed.status === 'active' && managed.synced && managed.lastState) {
         this.serializeWalletState(managed);
@@ -481,23 +468,16 @@ class WalletManager {
       const lastAccess = new Date(managed.info.lastAccessed).getTime();
       const idleMs = now - lastAccess;
 
-      // Purge: not accessed for 14 days -> permanent removal
+      // 2. Purge: not accessed for 14 days -> permanent removal
       if (idleMs > PURGE_AFTER_MS) {
         console.log(`[WalletManager] Purging ${managed.info.label || seed.substring(0, 12)}... (idle ${Math.round(idleMs / 86400000)} days)`);
         toRemove.push(seed);
         continue;
       }
 
-      // Suspend: active but not accessed for 15 min -> disconnect to save resources
-      if (managed.status === 'active' && idleMs > IDLE_SUSPEND_MS) {
-        console.log(`[WalletManager] Suspending ${managed.info.label || seed.substring(0, 12)}... (idle ${Math.round(idleMs / 60000)} min)`);
-        await this.disconnect(seed, false);
-        managed.status = 'suspended';
-      }
-
-      // Retry reconnect for suspended wallets that were recently accessed
-      if (managed.status === 'suspended' && idleMs < IDLE_SUSPEND_MS && !managed.ctx) {
-        console.log(`[WalletManager] Auto-resuming ${managed.info.label || seed.substring(0, 12)}...`);
+      // 3. Auto-reconnect: if a wallet is suspended (e.g. after connection error), try to resume
+      if (managed.status === 'suspended' && !managed.ctx) {
+        console.log(`[WalletManager] Auto-reconnecting ${managed.info.label || seed.substring(0, 12)}...`);
         try {
           await this.resume(managed);
         } catch {}
