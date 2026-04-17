@@ -50,7 +50,7 @@ const PURGE_AFTER_MS = 14 * 24 * 60 * 60 * 1000; // 14 days -> permanent removal
 const HOUSEKEEPING_MS = 60 * 1000;             // run housekeeping every 60s
 const RECONNECT_DELAY_MS = 10_000;             // wait 10s before reconnect attempt
 const MAX_RECONNECT_RETRIES = 3;               // retry 3 times, then wait for housekeeping
-const MAX_ACTIVE_WALLETS = 5;                  // max concurrent active WebSocket connections
+const MAX_ACTIVE_WALLETS = 20;                 // max concurrent active WebSocket connections
 
 // ---- Types ----
 
