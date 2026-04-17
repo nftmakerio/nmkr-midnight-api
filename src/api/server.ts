@@ -565,8 +565,14 @@ app.get('/api/wallet/balance/:address', async (req, res) => {
 
 app.post('/api/wallet/balance', async (req, res) => {
   try {
-    const seedOrAddress = req.body.seedOrAddress || req.body.seed; // backward compat
+    const seedOrAddress = req.body.seedOrAddress || req.body.seed;
     if (!seedOrAddress) return res.status(400).json({ error: 'seedOrAddress is required' });
+
+    // If watched: instant response from live state (same format as watch/list entries)
+    const watchStatus = walletManager.getStatus(seedOrAddress);
+    if (watchStatus) return res.json(watchStatus);
+
+    // Not watched: full sync required (slow)
     res.json(await getBalanceBySeed(seedOrAddress));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });

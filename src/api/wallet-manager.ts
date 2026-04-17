@@ -309,37 +309,80 @@ class WalletManager {
     return managed ? managed.info.seed : null;
   }
 
-  list(): any[] {
-    return Array.from(this.wallets.values()).map(m => {
-      const nightBalance = m.lastState?.unshielded?.balances?.[unshieldedToken().raw] ?? 0n;
-      const utxoCount = m.lastState?.unshielded?.availableCoins?.length ?? 0;
+  // Build a single wallet status object (used by both list and getStatus)
+  private buildWalletInfo(m: ManagedWallet): any {
+    const nightBalance = m.lastState?.unshielded?.balances?.[unshieldedToken().raw] ?? 0n;
+    const utxoCount = m.lastState?.unshielded?.availableCoins?.length ?? 0;
 
-      let dustRaw = '0';
-      try {
-        const cb = m.lastState?.dust?.capabilities?.coinsAndBalances;
-        if (cb && typeof cb.getWalletBalance === 'function') {
-          dustRaw = cb.getWalletBalance(m.lastState.dust.state, new Date()).toString();
-        }
-      } catch {}
-      const dustNum = Number(dustRaw) / 1_000_000_000_000;
+    let dustRaw = '0';
+    try {
+      const cb = m.lastState?.dust?.capabilities?.coinsAndBalances;
+      if (cb && typeof cb.getWalletBalance === 'function') {
+        dustRaw = cb.getWalletBalance(m.lastState.dust.state, new Date()).toString();
+      }
+    } catch {}
+    const dustNum = Number(dustRaw) / 1_000_000_000_000;
 
-      return {
-        label: m.info.label,
-        status: m.status,
-        synced: m.synced,
-        addedAt: m.info.addedAt,
-        lastAccessed: m.info.lastAccessed,
-        ...m.addresses,
-        balances: {
-          night: nightBalance.toString(),
-          nightFormatted: `${Number(nightBalance) / 1_000_000} NIGHT`,
-          dustRaw,
-          dustFormatted: `${dustNum.toFixed(4)} DUST`,
-          dustCoins: m.lastState?.dust?.availableCoins?.length ?? 0,
-          utxoCount,
+    // Sync progress
+    const sp = m.lastState?.shielded?.progress;
+    const up = m.lastState?.unshielded?.progress;
+    const dp = m.lastState?.dust?.progress;
+
+    const shieldedApplied = Number(sp?.appliedIndex ?? 0);
+    const shieldedHighest = Number(sp?.highestIndex ?? 0);
+    const unshieldedApplied = Number(up?.appliedId ?? 0);
+    const unshieldedHighest = Number(up?.highestTransactionId ?? 0);
+    const dustApplied = Number(dp?.appliedIndex ?? 0);
+    const dustHighest = Number(dp?.highestIndex ?? 0);
+
+    return {
+      label: m.info.label,
+      status: m.status,
+      synced: m.synced,
+      addedAt: m.info.addedAt,
+      lastAccessed: m.info.lastAccessed,
+      ...m.addresses,
+      balances: {
+        night: nightBalance.toString(),
+        nightFormatted: `${Number(nightBalance) / 1_000_000} NIGHT`,
+        dustRaw,
+        dustFormatted: `${dustNum.toFixed(4)} DUST`,
+        dustCoins: m.lastState?.dust?.availableCoins?.length ?? 0,
+        utxoCount,
+      },
+      syncProgress: {
+        shielded: {
+          applied: shieldedApplied,
+          highest: shieldedHighest,
+          percent: shieldedHighest > 0 ? Math.round(shieldedApplied / shieldedHighest * 100) : (m.synced ? 100 : null),
+          connected: sp?.isConnected ?? false,
         },
-      };
-    });
+        unshielded: {
+          applied: unshieldedApplied,
+          highest: unshieldedHighest,
+          percent: unshieldedHighest > 0 ? Math.round(unshieldedApplied / unshieldedHighest * 100) : null,
+          connected: up?.isConnected ?? false,
+        },
+        dust: {
+          applied: dustApplied,
+          highest: dustHighest,
+          percent: dustHighest > 0 ? Math.round(dustApplied / dustHighest * 100) : null,
+          connected: dp?.isConnected ?? false,
+        },
+      },
+    };
+  }
+
+  // Get status for a single wallet by seed or address (instant, no sync wait)
+  getStatus(seedOrAddress: string): any | null {
+    const managed = this.get(seedOrAddress) || this.findByAddress(seedOrAddress);
+    if (!managed) return null;
+    managed.info.lastAccessed = new Date().toISOString();
+    return this.buildWalletInfo(managed);
+  }
+
+  list(): any[] {
+    return Array.from(this.wallets.values()).map(m => this.buildWalletInfo(m));
   }
 
   // ---- Internal: connect / disconnect / suspend / resume ----
