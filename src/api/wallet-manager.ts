@@ -45,7 +45,7 @@ const WATCH_FILE = path.resolve(__dirname, '../../watched-wallets.json');
 const ADDRESS_WATCH_FILE = path.resolve(__dirname, '../../watched-addresses.json');
 
 // Timings
-const IDLE_SUSPEND_MS = 15 * 60 * 1000;       // 15 min -> suspend (disconnect WebSocket)
+const IDLE_SUSPEND_MS = 60 * 60 * 1000;       // 60 min -> suspend (disconnect WebSocket)
 const PURGE_AFTER_MS = 14 * 24 * 60 * 60 * 1000; // 14 days -> permanent removal
 const HOUSEKEEPING_MS = 60 * 1000;             // run housekeeping every 60s
 const RECONNECT_DELAY_MS = 10_000;             // wait 10s before reconnect attempt
@@ -69,12 +69,19 @@ export interface WalletContext {
 
 type WalletStatus = 'active' | 'suspended' | 'reconnecting';
 
+interface SerializedWalletState {
+  shielded: string;
+  unshielded: string;
+  dust: string;
+}
+
 interface ManagedWallet {
   info: WatchedWalletInfo;
   ctx: WalletContext | null;   // null when suspended
   status: WalletStatus;
   synced: boolean;
   lastState: any;
+  serializedState: SerializedWalletState | null;  // cached state for fast restore
   reconnectAttempts: number;
   addresses: {
     coinPublicKey: string;
@@ -82,6 +89,8 @@ interface ManagedWallet {
     unshieldedAddress: string;
   };
 }
+
+const STATE_CACHE_DIR = path.resolve(__dirname, '../../wallet-state-cache');
 
 // ---- Helpers ----
 
@@ -340,11 +349,12 @@ class WalletManager {
     setNetworkId(cfg.networkId as any);
 
     const addresses = getAddresses(info.seed, cfg.networkId);
-    const ctx = await this.createWalletContext(info.seed);
+    const cachedState = this.loadCachedState(info.seed);
+    const ctx = await this.createWalletContext(info.seed, cachedState);
 
     const managed: ManagedWallet = {
       info, ctx, status: 'active', synced: false, lastState: null,
-      reconnectAttempts: 0, addresses,
+      serializedState: cachedState, reconnectAttempts: 0, addresses,
     };
     this.wallets.set(info.seed, managed);
     this.indexAddresses(managed);
@@ -356,7 +366,7 @@ class WalletManager {
     const addresses = getAddresses(info.seed, ACTIVE_NETWORK.networkId);
     const managed: ManagedWallet = {
       info, ctx: null, status: 'suspended', synced: false, lastState: null,
-      reconnectAttempts: 0, addresses,
+      serializedState: this.loadCachedState(info.seed), reconnectAttempts: 0, addresses,
     };
     this.wallets.set(info.seed, managed);
     this.indexAddresses(managed);
@@ -414,7 +424,7 @@ class WalletManager {
   private async resume(managed: ManagedWallet) {
     console.log(`[WalletManager] Resuming ${managed.info.label || managed.info.seed.substring(0, 12)}...`);
     try {
-      const ctx = await this.createWalletContext(managed.info.seed);
+      const ctx = await this.createWalletContext(managed.info.seed, managed.serializedState);
       managed.ctx = ctx;
       managed.status = 'active';
       managed.reconnectAttempts = 0;
@@ -432,15 +442,24 @@ class WalletManager {
 
     const managed = this.wallets.get(seed);
     if (managed?.ctx) {
+      // Serialize state before stopping — allows fast restore later
+      this.serializeWalletState(managed);
       try { await managed.ctx.facade.stop(); } catch {}
       managed.ctx = null;
       managed.synced = false;
     }
   }
 
-  // ---- Housekeeping: suspend idle, purge stale, reconnect failed ----
+  // ---- Housekeeping: suspend idle, purge stale, reconnect failed, cache state ----
 
   private async housekeep() {
+    // Periodically serialize active wallets (every housekeeping run)
+    for (const managed of this.wallets.values()) {
+      if (managed.status === 'active' && managed.synced && managed.lastState) {
+        this.serializeWalletState(managed);
+      }
+    }
+
     const now = Date.now();
     const toRemove: string[] = [];
 
@@ -486,11 +505,44 @@ class WalletManager {
 
   // ---- Wallet creation ----
 
-  // Creates a wallet context. For watched wallets, uses a persistent LevelDB
-  // store keyed by a short hash of the seed so subsequent syncs only load the
-  // delta since the last run (much faster than a full sync every time).
-  // For temporary wallets (not watched), uses InMemoryTransactionHistoryStorage.
-  private async createWalletContext(seed: string, persistent = true): Promise<WalletContext> {
+  // Serialize the current wallet state to disk for fast restore later.
+  // Called before suspend/disconnect so we can skip the full sync on resume.
+  private serializeWalletState(managed: ManagedWallet) {
+    if (!managed.lastState) return;
+    try {
+      const serialized: SerializedWalletState = {
+        shielded: managed.lastState.shielded?.serialize?.() || '',
+        unshielded: managed.lastState.unshielded?.serialize?.() || '',
+        dust: managed.lastState.dust?.serialize?.() || '',
+      };
+      // Only save if we have meaningful data
+      if (serialized.shielded.length > 10) {
+        managed.serializedState = serialized;
+        // Also persist to disk
+        if (!fs.existsSync(STATE_CACHE_DIR)) fs.mkdirSync(STATE_CACHE_DIR, { recursive: true });
+        const cacheFile = path.join(STATE_CACHE_DIR, `${managed.info.seed.substring(0, 16)}.json`);
+        fs.writeFileSync(cacheFile, JSON.stringify(serialized));
+        console.log(`[WalletManager] State cached for ${managed.info.label || managed.info.seed.substring(0, 12)}... (${Math.round(serialized.shielded.length / 1024)}KB shielded, ${Math.round(serialized.dust.length / 1024)}KB dust)`);
+      }
+    } catch (err: any) {
+      console.error(`[WalletManager] Failed to serialize state: ${err.message}`);
+    }
+  }
+
+  // Load cached state from disk (if available)
+  private loadCachedState(seed: string): SerializedWalletState | null {
+    try {
+      const cacheFile = path.join(STATE_CACHE_DIR, `${seed.substring(0, 16)}.json`);
+      if (fs.existsSync(cacheFile)) {
+        return JSON.parse(fs.readFileSync(cacheFile, 'utf-8'));
+      }
+    } catch {}
+    return null;
+  }
+
+  // Creates a wallet context. If serialized state is available, uses restore()
+  // for a fast delta-sync (~5s) instead of a full sync (~9min).
+  private async createWalletContext(seed: string, serializedState?: SerializedWalletState | null): Promise<WalletContext> {
     const cfg = ACTIVE_NETWORK;
     setNetworkId(cfg.networkId as any);
 
@@ -500,12 +552,6 @@ class WalletManager {
     const dustSecretKey = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
     const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], networkId);
 
-    // Persistent storage: keyed by first 16 chars of seed to avoid collisions
-    // The LevelDB store survives API restarts so only delta-sync is needed.
-    const storeName = persistent
-      ? `wallet-sync-${seed.substring(0, 16)}`
-      : `wallet-tmp-${Date.now()}`;
-
     const walletConfig = {
       networkId,
       indexerClientConnection: { indexerHttpUrl: cfg.indexerHttp, indexerWsUrl: cfg.indexerWs },
@@ -513,11 +559,25 @@ class WalletManager {
       relayURL: new URL(cfg.nodeRpc.replace(/^http/, 'ws')),
     };
 
+    // Try to restore from cached state (much faster — only delta sync)
+    const cached = serializedState || this.loadCachedState(seed);
+    const useRestore = cached && cached.shielded.length > 10;
+
+    if (useRestore) {
+      console.log(`[WalletManager] Restoring ${seed.substring(0, 12)}... from cached state (fast delta sync)`);
+    }
+
     const facade = await (WalletFacade as any).init({
       configuration: walletConfig,
-      shielded: (config: any) => ShieldedWallet({ ...config }).startWithSecretKeys(shieldedSecretKeys),
-      unshielded: (config: any) => UnshieldedWallet({ ...config, txHistoryStorage: new InMemoryTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
-      dust: (config: any) => DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 } }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
+      shielded: (config: any) => useRestore
+        ? ShieldedWallet({ ...config }).restore(cached.shielded)
+        : ShieldedWallet({ ...config }).startWithSecretKeys(shieldedSecretKeys),
+      unshielded: (config: any) => useRestore
+        ? UnshieldedWallet({ ...config, txHistoryStorage: new InMemoryTransactionHistoryStorage() }).restore(cached.unshielded)
+        : UnshieldedWallet({ ...config, txHistoryStorage: new InMemoryTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
+      dust: (config: any) => useRestore
+        ? DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 } }).restore(cached.dust)
+        : DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 } }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
     }) as WalletFacade;
 
     await facade.start(shieldedSecretKeys, dustSecretKey);
