@@ -45,7 +45,7 @@ app.use(express.json());
 
 function maskSecrets(obj: any): any {
   if (!obj || typeof obj !== 'object') return obj;
-  const sensitiveKeys = ['seed', 'senderSeed', 'ownerSeed', 'dustSeed', 'mnemonic'];
+  const sensitiveKeys = ['seed', 'seedOrAddress', 'senderSeed', 'ownerSeed', 'dustSeed', 'mnemonic'];
   const clone: any = Array.isArray(obj) ? [...obj] : { ...obj };
   for (const key of Object.keys(clone)) {
     if (sensitiveKeys.includes(key) && typeof clone[key] === 'string') {
@@ -180,10 +180,10 @@ swaggerSpec.paths = {
   },
   '/api/wallet/balance': {
     post: {
-      tags: ['Wallet'], summary: 'Balance by seed (incl. Dust)',
-      description: 'Synchronizes the wallet and returns NIGHT + Dust balance. Takes 10-30s.',
-      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
-        seed: { type: 'string' },
+      tags: ['Wallet'], summary: 'Balance by seed or address (incl. Dust)',
+      description: 'Returns NIGHT + Dust balance. Accepts a seed OR an unshielded/shielded address. If the address is in the watch list, the stored seed is used automatically (instant response). Otherwise a full sync is performed.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seedOrAddress'], properties: {
+        seedOrAddress: { type: 'string', description: 'Seed (hex) OR unshielded address (mn_addr_...) OR shielded address (mn_shield-addr_...)', example: 'mn_addr_preprod19ws5fl2egqqtwx085626pwkcyygwsg3v8axd6t3yvtrufye8fghsvh3lq6' },
       } } } } },
       responses: { 200: { description: 'Balance with Dust info' }, 500: { description: 'Error' } },
     },
@@ -191,9 +191,9 @@ swaggerSpec.paths = {
   '/api/wallet/utxos': {
     post: {
       tags: ['Wallet'], summary: 'Query UTXOs of a wallet',
-      description: 'Returns all unshielded UTXOs of a wallet with value, token type, dust registration and transaction details. Requires the seed (wallet sync needed).',
-      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
-        seed: { type: 'string', example: '78053916a197eca740f9537da779ff7a89e213e6cc2f493ca2697161fe6baa3f' },
+      description: 'Returns all unshielded UTXOs. Accepts seed or address (if watched, uses stored seed).',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seedOrAddress'], properties: {
+        seedOrAddress: { type: 'string', description: 'Seed (hex) OR address (mn_addr_... / mn_shield-addr_...)', example: 'mn_addr_preprod19ws5fl2egqqtwx085626pwkcyygwsg3v8axd6t3yvtrufye8fghsvh3lq6' },
       } } } } },
       responses: {
         200: { description: 'UTXO list', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -220,9 +220,9 @@ swaggerSpec.paths = {
   '/api/wallet/register-dust': {
     post: {
       tags: ['Wallet'], summary: 'Register NIGHT UTXOs for Dust',
-      description: 'Registers NIGHT UTXOs for automatic DUST generation. DUST is required for transaction fees.',
-      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
-        seed: { type: 'string' },
+      description: 'Registers NIGHT UTXOs for automatic DUST generation. Accepts seed or address.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seedOrAddress'], properties: {
+        seedOrAddress: { type: 'string', description: 'Seed (hex) OR address' },
       } } } } },
       responses: { 200: { description: 'Registration' }, 500: { description: 'Error' } },
     },
@@ -271,9 +271,9 @@ swaggerSpec.paths = {
   '/api/wallet/transactions': {
     post: {
       tags: ['Wallet'], summary: 'Transaction history of a wallet',
-      description: 'Returns all unshielded transactions of a wallet with sender, recipient, amounts and whether it was a receive or send. Requires the seed (wallet sync). Can take 15-30s.',
-      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seed'], properties: {
-        seed: { type: 'string', example: '78053916a197eca740f9537da779ff7a89e213e6cc2f493ca2697161fe6baa3f' },
+      description: 'Returns all unshielded transactions. Accepts seed or address (if watched, uses stored seed).',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['seedOrAddress'], properties: {
+        seedOrAddress: { type: 'string', description: 'Seed (hex) OR address', example: 'mn_addr_preprod19ws5fl2egqqtwx085626pwkcyygwsg3v8axd6t3yvtrufye8fghsvh3lq6' },
       } } } } },
       responses: {
         200: { description: 'Transaction list', content: { 'application/json': { schema: { type: 'object', properties: {
@@ -565,25 +565,25 @@ app.get('/api/wallet/balance/:address', async (req, res) => {
 
 app.post('/api/wallet/balance', async (req, res) => {
   try {
-    const { seed } = req.body;
-    if (!seed) return res.status(400).json({ error: 'seed is required' });
-    res.json(await getBalanceBySeed(seed));
+    const seedOrAddress = req.body.seedOrAddress || req.body.seed; // backward compat
+    if (!seedOrAddress) return res.status(400).json({ error: 'seedOrAddress is required' });
+    res.json(await getBalanceBySeed(seedOrAddress));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/wallet/utxos', async (req, res) => {
   try {
-    const { seed } = req.body;
-    if (!seed) return res.status(400).json({ error: 'seed is required' });
-    res.json(await getUtxos(seed));
+    const seedOrAddress = req.body.seedOrAddress || req.body.seed;
+    if (!seedOrAddress) return res.status(400).json({ error: 'seedOrAddress is required' });
+    res.json(await getUtxos(seedOrAddress));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/wallet/register-dust', async (req, res) => {
   try {
-    const { seed } = req.body;
-    if (!seed) return res.status(400).json({ error: 'seed is required' });
-    res.json(await registerDust(seed));
+    const seedOrAddress = req.body.seedOrAddress || req.body.seed;
+    if (!seedOrAddress) return res.status(400).json({ error: 'seedOrAddress is required' });
+    res.json(await registerDust(seedOrAddress));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
@@ -605,9 +605,9 @@ app.post('/api/transfer/night', async (req, res) => {
 
 app.post('/api/wallet/transactions', async (req, res) => {
   try {
-    const { seed } = req.body;
-    if (!seed) return res.status(400).json({ error: 'seed is required' });
-    res.json(await getTransactionHistory(seed));
+    const seedOrAddress = req.body.seedOrAddress || req.body.seed;
+    if (!seedOrAddress) return res.status(400).json({ error: 'seedOrAddress is required' });
+    res.json(await getTransactionHistory(seedOrAddress));
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
