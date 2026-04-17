@@ -45,7 +45,6 @@ const WATCH_FILE = path.resolve(__dirname, '../../watched-wallets.json');
 const ADDRESS_WATCH_FILE = path.resolve(__dirname, '../../watched-addresses.json');
 
 // Timings
-const PURGE_AFTER_MS = 14 * 24 * 60 * 60 * 1000; // 14 days without access -> permanent removal
 const HOUSEKEEPING_MS = 60 * 1000;             // run housekeeping every 60s
 const RECONNECT_DELAY_MS = 10_000;             // wait 10s before reconnect attempt
 const MAX_RECONNECT_RETRIES = 3;               // retry 3 times, then wait for housekeeping
@@ -461,21 +460,8 @@ class WalletManager {
       }
     }
 
-    const now = Date.now();
-    const toRemove: string[] = [];
-
+    // 2. Auto-reconnect: if a wallet is suspended (e.g. after connection error), try to resume
     for (const [seed, managed] of this.wallets) {
-      const lastAccess = new Date(managed.info.lastAccessed).getTime();
-      const idleMs = now - lastAccess;
-
-      // 2. Purge: not accessed for 14 days -> permanent removal
-      if (idleMs > PURGE_AFTER_MS) {
-        console.log(`[WalletManager] Purging ${managed.info.label || seed.substring(0, 12)}... (idle ${Math.round(idleMs / 86400000)} days)`);
-        toRemove.push(seed);
-        continue;
-      }
-
-      // 3. Auto-reconnect: if a wallet is suspended (e.g. after connection error), try to resume
       if (managed.status === 'suspended' && !managed.ctx) {
         console.log(`[WalletManager] Auto-reconnecting ${managed.info.label || seed.substring(0, 12)}...`);
         try {
@@ -483,15 +469,6 @@ class WalletManager {
         } catch {}
       }
     }
-
-    for (const seed of toRemove) {
-      const m = this.wallets.get(seed);
-      if (m) this.unindexAddresses(m);
-      await this.disconnect(seed, false);
-      this.wallets.delete(seed);
-    }
-
-    if (toRemove.length > 0) this.saveToDisk();
   }
 
   private activeCount() { return [...this.wallets.values()].filter(m => m.status === 'active').length; }
