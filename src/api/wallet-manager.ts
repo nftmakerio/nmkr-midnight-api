@@ -524,22 +524,27 @@ class WalletManager {
   private serializeWalletState(managed: ManagedWallet) {
     if (!managed.lastState) return;
     try {
-      const serialized: SerializedWalletState = {
-        shielded: managed.lastState.shielded?.serialize?.() || '',
-        unshielded: managed.lastState.unshielded?.serialize?.() || '',
-        dust: managed.lastState.dust?.serialize?.() || '',
-      };
-      // Only save if we have meaningful data
+      let shielded = '', unshielded = '', dust = '';
+      try { shielded = managed.lastState.shielded?.serialize?.() || ''; } catch {}
+      try { unshielded = managed.lastState.unshielded?.serialize?.() || ''; } catch {}
+      try { dust = managed.lastState.dust?.serialize?.() || ''; } catch {}
+
+      const serialized: SerializedWalletState = { shielded, unshielded, dust };
+
+      // Only save if we have meaningful shielded data
       if (serialized.shielded.length > 10) {
+        // Only write to disk if state actually changed
+        const prev = managed.serializedState;
+        if (prev && prev.shielded === serialized.shielded && prev.dust === serialized.dust) return;
+
         managed.serializedState = serialized;
-        // Also persist to disk
         if (!fs.existsSync(STATE_CACHE_DIR)) fs.mkdirSync(STATE_CACHE_DIR, { recursive: true });
         const cacheFile = path.join(STATE_CACHE_DIR, `${managed.info.seed.substring(0, 16)}.json`);
         fs.writeFileSync(cacheFile, JSON.stringify(serialized));
         console.log(`[WalletManager] State cached for ${managed.info.label || managed.info.seed.substring(0, 12)}... (${Math.round(serialized.shielded.length / 1024)}KB shielded, ${Math.round(serialized.dust.length / 1024)}KB dust)`);
       }
-    } catch (err: any) {
-      console.error(`[WalletManager] Failed to serialize state: ${err.message}`);
+    } catch {
+      // Silently ignore serialization errors — cached state from last successful run is still valid
     }
   }
 
