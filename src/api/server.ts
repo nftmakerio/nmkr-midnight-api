@@ -35,6 +35,14 @@ import {
 import { ACTIVE_NETWORK, PUBLIC_API_URL } from './networks.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
 
+// Prevent unhandled rejections from crashing the process
+process.on('unhandledRejection', (reason: any) => {
+  const msg = reason?.message || reason?.toString?.() || 'unknown';
+  // Suppress known SDK sync noise (v9 event format mismatch)
+  if (msg.includes('Could not deserialize') || msg.includes('Could not serialize')) return;
+  console.error('[UnhandledRejection]', msg);
+});
+
 const app = express();
 app.use(cors());
 app.use(express.json());
@@ -739,10 +747,12 @@ app.post('/api/watch/remove', async (req, res) => {
 });
 
 app.get('/api/watch/list', (_req, res) => {
-  res.json({
-    fullWallets: walletManager.list(),
-    addressWatches: addressWatcher.list(),
-  });
+  try {
+    res.json({
+      fullWallets: walletManager.list(),
+      addressWatches: addressWatcher.list(),
+    });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/nft/transfer', async (req, res) => {

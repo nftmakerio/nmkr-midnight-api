@@ -311,10 +311,12 @@ class WalletManager {
 
   // Build a single wallet status object (used by both list and getStatus)
   private buildWalletInfo(m: ManagedWallet): any {
-    const nightBalance = m.lastState?.unshielded?.balances?.[unshieldedToken().raw] ?? 0n;
-    const utxoCount = m.lastState?.unshielded?.availableCoins?.length ?? 0;
-
+    let nightBalance = 0n;
+    let utxoCount = 0;
     let dustRaw = '0';
+
+    try { nightBalance = m.lastState?.unshielded?.balances?.[unshieldedToken().raw] ?? 0n; } catch {}
+    try { utxoCount = m.lastState?.unshielded?.availableCoins?.length ?? 0; } catch {}
     try {
       const cb = m.lastState?.dust?.capabilities?.coinsAndBalances;
       if (cb && typeof cb.getWalletBalance === 'function') {
@@ -324,9 +326,10 @@ class WalletManager {
     const dustNum = Number(dustRaw) / 1_000_000_000_000;
 
     // Sync progress
-    const sp = m.lastState?.shielded?.progress;
-    const up = m.lastState?.unshielded?.progress;
-    const dp = m.lastState?.dust?.progress;
+    let sp: any = null, up: any = null, dp: any = null;
+    try { sp = m.lastState?.shielded?.progress; } catch {}
+    try { up = m.lastState?.unshielded?.progress; } catch {}
+    try { dp = m.lastState?.dust?.progress; } catch {}
 
     const shieldedApplied = Number(sp?.appliedIndex ?? 0);
     const shieldedHighest = Number(sp?.highestIndex ?? 0);
