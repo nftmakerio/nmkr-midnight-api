@@ -437,8 +437,17 @@ class WalletManager {
           (state.unshielded?.availableCoins !== undefined && state.dust?.availableCoins !== undefined);
       },
       error: (err) => {
-        console.error(`[WalletManager] Sync error for ${managed.info.seed.substring(0, 12)}...: ${err.message}`);
-        // Only mark as unsynced if we have no data at all
+        const msg = err?.message || err?.toString?.() || '';
+        const isParsingError = msg.includes('deserialize') || msg.includes('serialize') || msg.includes('Wallet.Sync') || msg.includes('Wallet.Other');
+
+        if (isParsingError) {
+          // Non-fatal: SDK can't parse some events (e.g. v9 format) but connection is fine
+          // Don't reconnect, don't change synced status
+          return;
+        }
+
+        // Real connection error — reconnect
+        console.error(`[WalletManager] Connection error for ${managed.info.seed.substring(0, 12)}...: ${msg}`);
         if (!managed.lastState?.unshielded?.availableCoins) {
           managed.synced = false;
         }
