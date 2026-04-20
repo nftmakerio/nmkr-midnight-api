@@ -428,12 +428,20 @@ class WalletManager {
     const sub = managed.ctx.facade.state().pipe(Rx.throttleTime(3_000)).subscribe({
       next: (state: any) => {
         managed.lastState = state;
-        managed.synced = isFullySynced(state);
-        managed.reconnectAttempts = 0; // reset on successful data
+        managed.reconnectAttempts = 0;
+        // Consider synced if we have unshielded data loaded.
+        // Don't rely solely on isFullySynced — SDK event parsing errors
+        // (e.g. v9 format) can prevent shielded from ever completing.
+        managed.synced =
+          isFullySynced(state) ||
+          (state.unshielded?.availableCoins !== undefined && state.dust?.availableCoins !== undefined);
       },
       error: (err) => {
         console.error(`[WalletManager] Sync error for ${managed.info.seed.substring(0, 12)}...: ${err.message}`);
-        managed.synced = false;
+        // Only mark as unsynced if we have no data at all
+        if (!managed.lastState?.unshielded?.availableCoins) {
+          managed.synced = false;
+        }
         this.attemptReconnect(managed);
       },
     });
