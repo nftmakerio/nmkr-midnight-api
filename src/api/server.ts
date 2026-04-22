@@ -45,6 +45,24 @@ process.on('unhandledRejection', (reason: any) => {
 
 const app = express();
 app.use(cors());
+
+// Strip Unicode line/paragraph separators (U+2028, U+2029) before JSON parsing.
+// Swagger UI sometimes inserts these instead of normal newlines.
+app.use((req, _res, next) => {
+  if (req.headers['content-type']?.includes('application/json') && req.body === undefined) {
+    let raw = '';
+    req.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
+    req.on('end', () => {
+      try {
+        const cleaned = raw.replace(/[\u2028\u2029]/g, '');
+        req.body = JSON.parse(cleaned);
+      } catch { req.body = {}; }
+      next();
+    });
+  } else {
+    next();
+  }
+});
 app.use(express.json());
 
 // ---- Request Logger ----
