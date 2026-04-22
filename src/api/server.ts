@@ -46,23 +46,21 @@ process.on('unhandledRejection', (reason: any) => {
 const app = express();
 app.use(cors());
 
-// Custom JSON parser that strips Unicode line/paragraph separators (U+2028, U+2029)
-// before parsing. Swagger UI sometimes inserts these instead of normal newlines.
-app.use((req: any, res: any, next: any) => {
-  if (!req.headers['content-type']?.includes('application/json')) return next();
+app.use(express.json());
 
-  let raw = '';
-  req.setEncoding('utf8');
-  req.on('data', (chunk: string) => { raw += chunk; });
-  req.on('end', () => {
-    if (!raw) { req.body = {}; return next(); }
+// Catch JSON parse errors (including Unicode U+2028/U+2029 from Swagger UI)
+app.use((err: any, req: any, res: any, next: any) => {
+  if (err.type === 'entity.parse.failed') {
+    // Try to fix Unicode line separators and re-parse
+    const raw = err.body || '';
     try {
       req.body = JSON.parse(raw.replace(/[\u2028\u2029]/g, ''));
-    } catch (err: any) {
+      return next();
+    } catch {
       return res.status(400).json({ error: `Invalid JSON: ${err.message}` });
     }
-    next();
-  });
+  }
+  next(err);
 });
 
 // ---- Request Logger ----
