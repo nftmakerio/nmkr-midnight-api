@@ -445,28 +445,39 @@ class WalletManager {
       next: (state: any) => {
         managed.lastState = state;
         managed.reconnectAttempts = 0;
-        // Consider synced if we have unshielded data loaded.
-        // Don't rely solely on isFullySynced — SDK event parsing errors
-        // (e.g. v9 format) can prevent shielded from ever completing.
+        // Consider synced if:
+        // 1. SDK says fully synced, OR
+        // 2. We're connected AND have unshielded data loaded
+        // Don't mark as synced if not connected (applied=0, connected=false)
+        const isConnected =
+          state.unshielded?.progress?.isConnected === true ||
+          state.shielded?.progress?.isConnected === true ||
+          state.dust?.progress?.isConnected === true;
+        const hasData =
+          (state.unshielded?.availableCoins?.length > 0) ||
+          (Number(state.unshielded?.progress?.appliedId ?? 0) > 0);
+
         managed.synced =
           isFullySynced(state) ||
-          (state.unshielded?.availableCoins !== undefined && state.dust?.availableCoins !== undefined);
+          (isConnected && hasData);
       },
       error: (err) => {
         const msg = err?.message || err?.toString?.() || '';
-        const isParsingError = msg.includes('deserialize') || msg.includes('serialize') || msg.includes('Wallet.Sync') || msg.includes('Wallet.Other');
+        const isParsingError = msg.includes('deserialize') || msg.includes('serialize');
 
-        if (isParsingError) {
-          // Non-fatal: SDK can't parse some events (e.g. v9 format) but connection is fine
-          // Don't reconnect, don't change synced status
+        // Check if we actually have a working connection
+        const wasConnected =
+          managed.lastState?.unshielded?.progress?.isConnected === true ||
+          managed.lastState?.shielded?.progress?.isConnected === true;
+
+        if (isParsingError && wasConnected) {
+          // Non-fatal: SDK can't parse some events but connection is alive
           return;
         }
 
-        // Real connection error — reconnect
-        console.error(`[WalletManager] Connection error for ${managed.info.seed.substring(0, 12)}...: ${msg}`);
-        if (!managed.lastState?.unshielded?.availableCoins) {
-          managed.synced = false;
-        }
+        // Connection error or never connected — reconnect
+        console.error(`[WalletManager] Error for ${managed.info.seed.substring(0, 12)}...: ${msg.substring(0, 80)}`);
+        managed.synced = false;
         this.attemptReconnect(managed);
       },
     });
