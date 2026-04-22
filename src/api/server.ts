@@ -42,22 +42,6 @@ process.on('unhandledRejection', (reason: any) => {
   console.error('[UnhandledRejection]', msg);
 });
 
-// Suppress known SDK sync noise from stderr.
-// The Effect framework logs Wallet.Sync errors directly to stderr — we can't
-// catch them with try/catch. This intercepts stderr and silences known patterns.
-const origStderrWrite = process.stderr.write.bind(process.stderr);
-process.stderr.write = (chunk: any, ...args: any[]) => {
-  const str = typeof chunk === 'string' ? chunk : chunk?.toString?.() || '';
-  if (str.includes('Wallet.Sync') ||
-      str.includes('Wallet.Other') ||
-      str.includes('Could not deserialize') ||
-      str.includes('Could not serialize') ||
-      str.includes('_tag:') ||
-      str.includes('at e (') && str.includes('cause.ts')) {
-    return true; // swallow
-  }
-  return origStderrWrite(chunk, ...args);
-} as any;
 
 const app = express();
 app.use(cors());
