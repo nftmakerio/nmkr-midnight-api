@@ -18,13 +18,13 @@ nft-transfer-*/
 nft-call-*/
 wallet-sync-*/
 wallet-tmp-*/
-wallet-state-cache/
+wallet-state-cache*/
 
 # Wallet files (NEVER commit seeds or keys!)
 *.wallet.json
 .midnight/
-watched-wallets.json
-watched-addresses.json
+watched-wallets*.json
+watched-addresses*.json
 
 # Environment
 .env

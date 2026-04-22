@@ -45,8 +45,8 @@ import { setupBlockfrostAuth } from './blockfrost-auth.js';
 setupBlockfrostAuth();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const WATCH_FILE = path.resolve(__dirname, '../../watched-wallets.json');
-const ADDRESS_WATCH_FILE = path.resolve(__dirname, '../../watched-addresses.json');
+const WATCH_FILE = path.resolve(__dirname, `../../watched-wallets.${ACTIVE_NETWORK.networkId}.json`);
+const ADDRESS_WATCH_FILE = path.resolve(__dirname, `../../watched-addresses.${ACTIVE_NETWORK.networkId}.json`);
 
 // Timings
 const HOUSEKEEPING_MS = 60 * 1000;             // run housekeeping every 60s
@@ -93,7 +93,7 @@ interface ManagedWallet {
   };
 }
 
-const STATE_CACHE_DIR = path.resolve(__dirname, '../../wallet-state-cache');
+const STATE_CACHE_DIR = path.resolve(__dirname, `../../wallet-state-cache-${ACTIVE_NETWORK.networkId}`);
 
 // ---- Helpers ----
 
