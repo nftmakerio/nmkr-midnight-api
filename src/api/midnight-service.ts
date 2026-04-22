@@ -87,11 +87,53 @@ async function withWalletFast<T>(seedOrAddress: string, fn: (ctx: WalletContext,
   }
 }
 
+// Retryable errors: STALE_UTXO, submission errors, balance failures
+// These happen when the wallet state is slightly behind the chain.
+// Waiting for a fresh state update and retrying usually fixes them.
+const RETRYABLE_PATTERNS = [
+  'STALE_UTXO',
+  'stale',
+  'Transaction submission error',
+  'could not balance',
+  'Insufficient',
+  'consumed by another',
+];
+
+const MAX_TX_RETRIES = 2;
+const RETRY_WAIT_MS = 6_000; // wait 6s for new block/state update
+
+function isRetryableError(err: any): boolean {
+  const msg = err?.message || err?.toString?.() || '';
+  return RETRYABLE_PATTERNS.some(p => msg.includes(p));
+}
+
+// Generic retry wrapper for any async operation that might fail with STALE_UTXO etc.
+// Waits for a fresh wallet state between retries (6s = ~1 block time).
+async function withRetry<T>(ctx: WalletContext, fn: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; attempt <= MAX_TX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      if (attempt < MAX_TX_RETRIES && isRetryableError(err)) {
+        console.log(`[Retry] Attempt ${attempt + 1}/${MAX_TX_RETRIES} failed: ${err.message?.substring(0, 80)}. Waiting ${RETRY_WAIT_MS / 1000}s...`);
+        await Rx.firstValueFrom(
+          ctx.facade.state().pipe(Rx.skip(1), Rx.take(1), Rx.timeout(RETRY_WAIT_MS)),
+        ).catch(() => {});
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error('Max retries exceeded');
+}
+
 async function withWallet<T>(seed: string, cfg: NetworkConfig, fn: (ctx: WalletContext, state: any) => Promise<T>): Promise<T> {
   const { ctx, cached } = await getWalletCtx(seed);
   try {
-    const state: any = await Rx.firstValueFrom(ctx.facade.state());
-    return await fn(ctx, state);
+    return await withRetry(ctx, async () => {
+      const state: any = await Rx.firstValueFrom(ctx.facade.state());
+      return fn(ctx, state);
+    });
   } finally {
     if (!cached) await ctx.facade.stop();
   }
@@ -360,17 +402,18 @@ export async function transferNight(params: {
       outputs,
     }];
 
-    const ttl = new Date(Date.now() + 30 * 60 * 1000);
-    const recipe = await (sender.facade as any).transferTransaction(
-      tokenTransfer,
-      { shieldedSecretKeys: sender.shieldedSecretKeys, dustSecretKey },
-      { ttl },
-    );
-
-    const signFn = (payload: Uint8Array) => sender.unshieldedKeystore.signData(payload);
-    const signedRecipe = await (sender.facade as any).signRecipe(recipe, signFn);
-    const finalizedTx = await sender.facade.finalizeTransaction(signedRecipe.transaction);
-    const txHash = await sender.facade.submitTransaction(finalizedTx);
+    const txHash = await withRetry(sender, async () => {
+      const ttl = new Date(Date.now() + 30 * 60 * 1000);
+      const recipe = await (sender.facade as any).transferTransaction(
+        tokenTransfer,
+        { shieldedSecretKeys: sender.shieldedSecretKeys, dustSecretKey },
+        { ttl },
+      );
+      const signFn = (payload: Uint8Array) => sender.unshieldedKeystore.signData(payload);
+      const signedRecipe = await (sender.facade as any).signRecipe(recipe, signFn);
+      const finalizedTx = await sender.facade.finalizeTransaction(signedRecipe.transaction);
+      return sender.facade.submitTransaction(finalizedTx);
+    });
 
     const recipientsOut = params.recipients.map(r => ({
       toAddress: r.toAddress,
@@ -437,13 +480,15 @@ export async function registerDust(seedOrAddress: string) {
       };
     }
 
-    const recipe = await (ctx.facade as any).registerNightUtxosForDustGeneration(
-      unregistered,
-      ctx.unshieldedKeystore.getPublicKey(),
-      (payload: Uint8Array) => ctx.unshieldedKeystore.signData(payload),
-    );
-    const finalized = await (ctx.facade as any).finalizeRecipe(recipe);
-    const txHash = await ctx.facade.submitTransaction(finalized);
+    const txHash = await withRetry(ctx, async () => {
+      const recipe = await (ctx.facade as any).registerNightUtxosForDustGeneration(
+        unregistered,
+        ctx.unshieldedKeystore.getPublicKey(),
+        (payload: Uint8Array) => ctx.unshieldedKeystore.signData(payload),
+      );
+      const finalized = await (ctx.facade as any).finalizeRecipe(recipe);
+      return ctx.facade.submitTransaction(finalized);
+    });
 
     return {
       status: 'registered',
@@ -559,7 +604,9 @@ export async function deployAndMintNft(params: {
     });
 
     const contractAddress = deployed.deployTxData.public.contractAddress;
-    const mintResult = await deployed.callTx.mint(mintTo, params.uri, params.name, tokenImage, tokenMediaType);
+    const mintResult = await withRetry(ctx, () =>
+      deployed.callTx.mint(mintTo, params.uri, params.name, tokenImage, tokenMediaType),
+    );
 
     return {
       contractAddress,
@@ -942,7 +989,9 @@ export async function mintNft(params: {
 
     const tokenImage = params.image || '';
     const tokenMediaType = params.mediaType || '';
-    const mintResult = await contract.callTx.mint(mintTo, params.uri, params.name, tokenImage, tokenMediaType);
+    const mintResult = await withRetry(ctx, () =>
+      contract.callTx.mint(mintTo, params.uri, params.name, tokenImage, tokenMediaType),
+    );
 
     return {
       contractAddress: params.contractAddress,
@@ -1075,7 +1124,7 @@ async function callContract<T>(
       initialPrivateState: {},
     });
 
-    const result = await fn(contract);
+    const result = await withRetry(ctx, () => fn(contract));
     return { result, coinPublicKey };
   } finally {
     if (!cached) await ctx.facade.stop();
