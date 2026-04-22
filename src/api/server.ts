@@ -796,6 +796,20 @@ app.get('/api/version', async (_req, res) => {
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
+app.post('/api/watch/clear-cache', async (_req, res) => {
+  try {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const cacheDir = path.resolve(new URL('.', import.meta.url).pathname, '../../wallet-state-cache');
+    let deleted = 0;
+    if (fs.existsSync(cacheDir)) {
+      const files = fs.readdirSync(cacheDir);
+      for (const f of files) { fs.unlinkSync(path.join(cacheDir, f)); deleted++; }
+    }
+    res.json({ status: 'ok', deletedFiles: deleted, message: `Cleared ${deleted} cache file(s). Restart API to re-sync all wallets.` });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', network: ACTIVE_NETWORK.networkId });
 });
