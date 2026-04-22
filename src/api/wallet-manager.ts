@@ -146,20 +146,20 @@ class WalletManager {
 
   async initialize() {
     const saved = this.loadFromDisk();
-    console.log(`[WalletManager] Loading ${saved.length} watched wallet(s)...`);
+    console.log(`[WalletManager] Loading ${saved.length} watched wallet(s) in parallel...`);
 
-    // Connect all wallets sequentially (not parallel) to avoid memory spikes.
-    // Each wallet uses cached state if available for fast restore (~5s).
-    for (const info of saved) {
-      try {
-        await this.connect(info);
-        console.log(`[WalletManager] Connected: ${info.label || info.seed.substring(0, 12)}...`);
-      } catch (err: any) {
-        console.error(`[WalletManager] Failed to connect ${info.seed.substring(0, 12)}...: ${err.message}`);
-        // Keep in list but mark as needing reconnect
-        this.addSuspended(info);
-      }
-    }
+    // Connect all wallets in parallel for fastest startup.
+    const results = await Promise.allSettled(
+      saved.map(async (info) => {
+        try {
+          await this.connect(info);
+          console.log(`[WalletManager] Connected: ${info.label || info.seed.substring(0, 12)}...`);
+        } catch (err: any) {
+          console.error(`[WalletManager] Failed to connect ${info.seed.substring(0, 12)}...: ${err.message}`);
+          this.addSuspended(info);
+        }
+      }),
+    );
     console.log(`[WalletManager] ${this.wallets.size} wallet(s) loaded (${this.activeCount()} active, ${this.suspendedCount()} suspended).`);
 
     // Start housekeeping
