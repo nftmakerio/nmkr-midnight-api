@@ -396,11 +396,23 @@ class WalletManager {
 
     const addresses = getAddresses(info.seed, cfg.networkId);
     const cachedState = this.loadCachedState(info.seed);
-    const ctx = await this.createWalletContext(info.seed, cachedState);
+
+    let ctx: WalletContext;
+    try {
+      ctx = await this.createWalletContext(info.seed, cachedState);
+    } catch {
+      // Cache might be stale — retry without cache
+      console.warn(`[WalletManager] Cached connect failed for ${info.seed.substring(0, 12)}..., trying full sync`);
+      try {
+        const cacheFile = path.join(STATE_CACHE_DIR, `${info.seed.substring(0, 16)}.json`);
+        if (fs.existsSync(cacheFile)) fs.unlinkSync(cacheFile);
+      } catch {}
+      ctx = await this.createWalletContext(info.seed, null);
+    }
 
     const managed: ManagedWallet = {
       info, ctx, status: 'active', synced: false, lastState: null,
-      serializedState: cachedState, reconnectAttempts: 0, addresses,
+      serializedState: null, reconnectAttempts: 0, addresses,
     };
     this.wallets.set(info.seed, managed);
     this.indexAddresses(managed);
@@ -486,8 +498,30 @@ class WalletManager {
 
   private async resume(managed: ManagedWallet) {
     console.log(`[WalletManager] Resuming ${managed.info.label || managed.info.seed.substring(0, 12)}...`);
+
+    // Try restore from cache first (fast), fall back to full sync
+    if (managed.serializedState || this.loadCachedState(managed.info.seed)) {
+      try {
+        const ctx = await this.createWalletContext(managed.info.seed, managed.serializedState);
+        managed.ctx = ctx;
+        managed.status = 'active';
+        managed.reconnectAttempts = 0;
+        this.subscribe(managed);
+        return;
+      } catch (err: any) {
+        console.warn(`[WalletManager] Cached restore failed for ${managed.info.seed.substring(0, 12)}..., clearing cache and doing full sync`);
+        managed.serializedState = null;
+        // Delete stale cache file
+        try {
+          const cacheFile = path.join(STATE_CACHE_DIR, `${managed.info.seed.substring(0, 16)}.json`);
+          if (fs.existsSync(cacheFile)) fs.unlinkSync(cacheFile);
+        } catch {}
+      }
+    }
+
+    // Full sync (no cache)
     try {
-      const ctx = await this.createWalletContext(managed.info.seed, managed.serializedState);
+      const ctx = await this.createWalletContext(managed.info.seed, null);
       managed.ctx = ctx;
       managed.status = 'active';
       managed.reconnectAttempts = 0;

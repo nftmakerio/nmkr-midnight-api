@@ -127,7 +127,6 @@ export function getWalletInfo(seed: string) {
     coinPublicKey,
     shieldedAddress: shieldedAddr.asString(),
     unshieldedAddress: unshieldedKeystore.getBech32Address().asString(),
-    network: cfg.networkId,
   };
 }
 
@@ -384,7 +383,6 @@ export async function transferNight(params: {
       recipients: recipientsOut,
       totalRaw: totalRaw.toString(),
       totalNight: Number(totalRaw) / 1_000_000,
-      network: cfg.networkId,
     };
   } finally {
     if (!senderCached) await sender.facade.stop();
@@ -413,7 +411,6 @@ export async function registerDust(seedOrAddress: string) {
         dustCoins,
         registeredUtxos: state.unshielded.availableCoins.length,
         unregisteredUtxos: 0,
-        network: cfg.networkId,
       };
     }
 
@@ -425,7 +422,6 @@ export async function registerDust(seedOrAddress: string) {
         dustCoins: 0,
         registeredUtxos: 0,
         unregisteredUtxos: 0,
-        network: cfg.networkId,
       };
     }
 
@@ -443,7 +439,6 @@ export async function registerDust(seedOrAddress: string) {
       txHash,
       nightFormatted: `${Number(nightBalance) / 1_000_000} NIGHT`,
       registeredUtxos: unregistered.length,
-      network: cfg.networkId,
     };
   } finally {
     if (!cached) await ctx.facade.stop();
@@ -569,7 +564,6 @@ export async function deployAndMintNft(params: {
       collectionMediaType: collMedia,
       ownerSeed: params.seed,
       ownerCoinPublicKey: coinPublicKey,
-      network: cfg.networkId,
     };
   } finally {
     if (!cached) await ctx.facade.stop();
@@ -618,7 +612,6 @@ export async function queryNftContract(contractAddress: string) {
     transferable: state.transferable === true,
     totalSupply: Number(state.nextTokenId),
     tokens,
-    network: cfg.networkId,
   };
 }
 
@@ -640,7 +633,6 @@ export async function getUtxos(seedOrAddress: string) {
     const totalRaw = state.unshielded.balances[unshieldedToken().raw] ?? 0n;
     return {
       address: info.unshieldedAddress,
-      network: cfg.networkId,
       totalNight: Number(totalRaw) / 1_000_000,
       totalRaw: totalRaw.toString(),
       utxoCount: utxos.length,
@@ -681,7 +673,6 @@ export async function getTransaction(txHash: string) {
           outputIndex: o.outputIndex,
         })),
         contractActions: (tx.contractActions || []).map((a: any) => a.address),
-        network: cfg.networkId,
       };
     }
   }
@@ -762,7 +753,6 @@ export async function getTransactionHistory(seedOrAddress: string) {
 
     return {
       address: myAddress,
-      network: cfg.networkId,
       transactionCount: transactions.length,
       transactions,
     };
@@ -843,7 +833,6 @@ export async function createCollection(params: {
       image,
       mediaType,
       symbol: params.symbol,
-      network: cfg.networkId,
     };
   } finally {
     if (!cached) await ctx.facade.stop();
@@ -951,7 +940,6 @@ export async function mintNft(params: {
       name: params.name,
       image: tokenImage,
       mediaType: tokenMediaType,
-      network: cfg.networkId,
       newCollection: false,
     };
   } finally {
@@ -1019,7 +1007,6 @@ export async function transferNft(params: {
       tokenId: params.tokenId,
       from: coinPublicKey,
       to: resolvedTo,
-      network: cfg.networkId,
     };
   } finally {
     if (!cached) await ctx.facade.stop();
@@ -1108,7 +1095,6 @@ export async function approveNft(params: {
     tokenId: params.tokenId,
     owner: coinPublicKey,
     approved: resolvedTo,
-    network: cfg.networkId,
   };
 }
 
@@ -1135,7 +1121,6 @@ export async function setApprovalForAllNft(params: {
     owner: coinPublicKey,
     operator: resolvedOperator,
     approved: params.approved,
-    network: cfg.networkId,
   };
 }
 
@@ -1155,7 +1140,6 @@ export async function burnNft(params: {
     contractAddress: params.contractAddress,
     tokenId: params.tokenId,
     burnedBy: coinPublicKey,
-    network: cfg.networkId,
   };
 }
 
