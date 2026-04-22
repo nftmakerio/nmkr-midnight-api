@@ -40,6 +40,10 @@ import { type NetworkConfig, ACTIVE_NETWORK } from './networks.js';
 // @ts-expect-error: Needed for GraphQL subscriptions
 globalThis.WebSocket = WebSocket;
 
+// Set up Blockfrost auth if configured (wraps fetch + WebSocket)
+import { setupBlockfrostAuth } from './blockfrost-auth.js';
+setupBlockfrostAuth();
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WATCH_FILE = path.resolve(__dirname, '../../watched-wallets.json');
 const ADDRESS_WATCH_FILE = path.resolve(__dirname, '../../watched-addresses.json');
