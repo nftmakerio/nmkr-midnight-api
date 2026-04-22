@@ -46,24 +46,24 @@ process.on('unhandledRejection', (reason: any) => {
 const app = express();
 app.use(cors());
 
-// Strip Unicode line/paragraph separators (U+2028, U+2029) before JSON parsing.
+// Parse JSON with Unicode line/paragraph separator cleanup (U+2028, U+2029).
 // Swagger UI sometimes inserts these instead of normal newlines.
-app.use((req, _res, next) => {
-  if (req.headers['content-type']?.includes('application/json') && req.body === undefined) {
-    let raw = '';
-    req.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
-    req.on('end', () => {
-      try {
-        const cleaned = raw.replace(/[\u2028\u2029]/g, '');
-        req.body = JSON.parse(cleaned);
-      } catch { req.body = {}; }
-      next();
-    });
-  } else {
-    next();
+app.use(express.json({
+  verify: (_req: any, _res: any, buf: Buffer) => {
+    // Store raw buffer so we can clean it
+    (_req as any)._rawBody = buf;
+  },
+}));
+app.use((req: any, _res: any, next: any) => {
+  if (req._rawBody && req.body === undefined) {
+    // express.json failed — try cleaning Unicode separators
+    try {
+      const cleaned = req._rawBody.toString().replace(/[\u2028\u2029]/g, '');
+      req.body = JSON.parse(cleaned);
+    } catch { req.body = {}; }
   }
+  next();
 });
-app.use(express.json());
 
 // ---- Request Logger ----
 // Logs all API calls with method, path, status, duration, and request body
