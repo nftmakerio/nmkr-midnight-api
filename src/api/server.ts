@@ -46,23 +46,23 @@ process.on('unhandledRejection', (reason: any) => {
 const app = express();
 app.use(cors());
 
-// Parse JSON with Unicode line/paragraph separator cleanup (U+2028, U+2029).
-// Swagger UI sometimes inserts these instead of normal newlines.
-app.use(express.json({
-  verify: (_req: any, _res: any, buf: Buffer) => {
-    // Store raw buffer so we can clean it
-    (_req as any)._rawBody = buf;
-  },
-}));
-app.use((req: any, _res: any, next: any) => {
-  if (req._rawBody && req.body === undefined) {
-    // express.json failed — try cleaning Unicode separators
+// Custom JSON parser that strips Unicode line/paragraph separators (U+2028, U+2029)
+// before parsing. Swagger UI sometimes inserts these instead of normal newlines.
+app.use((req: any, res: any, next: any) => {
+  if (!req.headers['content-type']?.includes('application/json')) return next();
+
+  let raw = '';
+  req.setEncoding('utf8');
+  req.on('data', (chunk: string) => { raw += chunk; });
+  req.on('end', () => {
+    if (!raw) { req.body = {}; return next(); }
     try {
-      const cleaned = req._rawBody.toString().replace(/[\u2028\u2029]/g, '');
-      req.body = JSON.parse(cleaned);
-    } catch { req.body = {}; }
-  }
-  next();
+      req.body = JSON.parse(raw.replace(/[\u2028\u2029]/g, ''));
+    } catch (err: any) {
+      return res.status(400).json({ error: `Invalid JSON: ${err.message}` });
+    }
+    next();
+  });
 });
 
 // ---- Request Logger ----
