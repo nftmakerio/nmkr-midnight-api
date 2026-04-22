@@ -415,6 +415,17 @@ export async function registerDust(seedOrAddress: string) {
     }
 
     if (unregistered.length === 0 && dustCoins === 0) {
+      const totalUtxos = state.unshielded.availableCoins?.length ?? 0;
+      if (totalUtxos > 0) {
+        return {
+          status: 'waiting_for_dust',
+          message: 'All NIGHT UTXOs are registered. Dust is generating — this can take several minutes.',
+          nightFormatted: `${Number(nightBalance) / 1_000_000} NIGHT`,
+          dustCoins: 0,
+          registeredUtxos: totalUtxos,
+          unregisteredUtxos: 0,
+        };
+      }
       return {
         status: 'no_utxos',
         message: 'No NIGHT UTXOs available. Please receive NIGHT first.',
