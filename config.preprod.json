@@ -1,0 +1,7 @@
+{
+  "network": "preprod",
+  "port": 3001,
+  "proofServer": "http://localhost:6300",
+  "apiUrl": "https://midnight-api.preprod.nmkr.io",
+  "nodeOptions": "--max-old-space-size=16384"
+}

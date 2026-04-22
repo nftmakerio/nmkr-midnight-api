@@ -1,0 +1,6 @@
+{
+  "network": "preview",
+  "port": 3002,
+  "proofServer": "http://localhost:6300",
+  "apiUrl": "https://midnight-api.preview.nmkr.io"
+}

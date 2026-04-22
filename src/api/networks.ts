@@ -1,7 +1,16 @@
 // =============================================================
 // Network configuration for Midnight
-// One instance = one network. Determined by MIDNIGHT_NETWORK env var.
+// One instance = one network. Config loaded from:
+//   1. Config file: config.<network>.json (via --config or MIDNIGHT_CONFIG)
+//   2. Environment variables (MIDNIGHT_NETWORK, PORT, etc.)
+//   3. Defaults
 // =============================================================
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export type NetworkName = 'preview' | 'preprod' | 'mainnet';
 
@@ -11,13 +20,56 @@ export interface NetworkConfig {
   indexerHttp: string;
   indexerWs: string;
   proofServer: string;
-  blockfrostProjectId?: string;  // if set, use Blockfrost endpoints with auth
+  blockfrostProjectId?: string;
 }
 
-// Blockfrost configuration (optional — set BLOCKFROST_PROJECT_ID to enable)
-const BLOCKFROST_PROJECT_ID = process.env.BLOCKFROST_PROJECT_ID || '';
+// ---- Load config file ----
 
-// Blockfrost endpoint patterns per network
+interface ConfigFile {
+  network?: string;
+  port?: number;
+  proofServer?: string;
+  apiUrl?: string;
+  blockfrostProjectId?: string;
+  nodeOptions?: string;
+}
+
+function loadConfigFile(): ConfigFile {
+  // Check --config CLI arg, MIDNIGHT_CONFIG env, or auto-detect from MIDNIGHT_NETWORK
+  const args = process.argv;
+  const configArgIdx = args.indexOf('--config');
+  let configPath = '';
+
+  if (configArgIdx >= 0 && args[configArgIdx + 1]) {
+    configPath = args[configArgIdx + 1];
+  } else if (process.env.MIDNIGHT_CONFIG) {
+    configPath = process.env.MIDNIGHT_CONFIG;
+  } else {
+    // Auto-detect: config.<network>.json in project root
+    const network = process.env.MIDNIGHT_NETWORK || 'preprod';
+    const autoPath = path.resolve(__dirname, `../../config.${network}.json`);
+    if (fs.existsSync(autoPath)) configPath = autoPath;
+  }
+
+  if (configPath && fs.existsSync(configPath)) {
+    try {
+      const raw = fs.readFileSync(configPath, 'utf-8');
+      console.log(`[Config] Loaded from ${configPath}`);
+      return JSON.parse(raw);
+    } catch (err: any) {
+      console.error(`[Config] Failed to parse ${configPath}: ${err.message}`);
+    }
+  }
+
+  return {};
+}
+
+const configFile = loadConfigFile();
+
+// ---- Blockfrost ----
+
+const BLOCKFROST_PROJECT_ID = process.env.BLOCKFROST_PROJECT_ID || configFile.blockfrostProjectId || '';
+
 const BLOCKFROST_ENDPOINTS: Record<NetworkName, { indexerHttp: string; indexerWs: string; nodeRpc: string }> = {
   preview: {
     indexerHttp: 'https://midnight-preview.blockfrost.io/api/v0',
@@ -36,7 +88,6 @@ const BLOCKFROST_ENDPOINTS: Record<NetworkName, { indexerHttp: string; indexerWs
   },
 };
 
-// Default Midnight endpoints (no auth required)
 const DEFAULT_ENDPOINTS: Record<NetworkName, { indexerHttp: string; indexerWs: string; nodeRpc: string }> = {
   preview: {
     indexerHttp: 'https://indexer.preview.midnight.network/api/v4/graphql',
@@ -55,26 +106,26 @@ const DEFAULT_ENDPOINTS: Record<NetworkName, { indexerHttp: string; indexerWs: s
   },
 };
 
-const NETWORKS: Record<NetworkName, NetworkConfig> = Object.fromEntries(
-  (['preview', 'preprod', 'mainnet'] as NetworkName[]).map(n => {
-    const endpoints = BLOCKFROST_PROJECT_ID ? BLOCKFROST_ENDPOINTS[n] : DEFAULT_ENDPOINTS[n];
-    return [n, {
-      networkId: n,
-      ...endpoints,
-      proofServer: process.env.MIDNIGHT_PROOF_SERVER || 'http://localhost:6300',
-      blockfrostProjectId: BLOCKFROST_PROJECT_ID || undefined,
-    }];
-  }),
-) as Record<NetworkName, NetworkConfig>;
+// ---- Build active config ----
 
-const envNetwork = (process.env.MIDNIGHT_NETWORK || 'preprod').toLowerCase() as NetworkName;
-if (!NETWORKS[envNetwork]) {
-  throw new Error(`Invalid MIDNIGHT_NETWORK="${envNetwork}". Must be: preview, preprod, mainnet`);
+const envNetwork = (configFile.network || process.env.MIDNIGHT_NETWORK || 'preprod').toLowerCase() as NetworkName;
+if (!['preview', 'preprod', 'mainnet'].includes(envNetwork)) {
+  throw new Error(`Invalid network "${envNetwork}". Must be: preview, preprod, mainnet`);
 }
 
-// The active network for this instance — determined at startup
-export const ACTIVE_NETWORK: NetworkConfig = NETWORKS[envNetwork];
+const endpoints = BLOCKFROST_PROJECT_ID ? BLOCKFROST_ENDPOINTS[envNetwork] : DEFAULT_ENDPOINTS[envNetwork];
 
-// Public URL (for Swagger — set via MIDNIGHT_API_URL env)
+export const ACTIVE_NETWORK: NetworkConfig = {
+  networkId: envNetwork,
+  ...endpoints,
+  proofServer: process.env.MIDNIGHT_PROOF_SERVER || configFile.proofServer || 'http://localhost:6300',
+  blockfrostProjectId: BLOCKFROST_PROJECT_ID || undefined,
+};
+
+// Public URL for Swagger
 export const PUBLIC_API_URL: string =
-  process.env.MIDNIGHT_API_URL || `https://midnight-api.${envNetwork}.nmkr.io`;
+  process.env.MIDNIGHT_API_URL || configFile.apiUrl || `https://midnight-api.${envNetwork}.nmkr.io`;
+
+// Port (used by server.ts)
+export const PORT: number =
+  Number(process.env.PORT) || configFile.port || 3000;

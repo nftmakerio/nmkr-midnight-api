@@ -32,7 +32,7 @@ import {
   setApprovalForAllNft,
   burnNft,
 } from './midnight-service.js';
-import { ACTIVE_NETWORK, PUBLIC_API_URL } from './networks.js';
+import { ACTIVE_NETWORK, PUBLIC_API_URL, PORT } from './networks.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
 
 // Prevent unhandled rejections from crashing the process
@@ -816,7 +816,7 @@ app.get('/api/health', (_req, res) => {
 
 // ---- Start ----
 
-const PORT = process.env.PORT || 3000;
+// PORT is imported from networks.ts (reads config file + env)
 
 // Initialize wallet manager (reconnect watched wallets), then start server
 addressWatcher.initialize();

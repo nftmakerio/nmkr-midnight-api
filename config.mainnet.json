@@ -1,0 +1,6 @@
+{
+  "network": "mainnet",
+  "port": 3003,
+  "proofServer": "http://localhost:6300",
+  "apiUrl": "https://midnight-api.nmkr.io"
+}
