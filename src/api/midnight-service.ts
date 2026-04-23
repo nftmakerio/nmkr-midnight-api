@@ -1213,15 +1213,50 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext)
   const state: any = await Rx.firstValueFrom(
     ctx.facade.state().pipe(Rx.filter((s: any) => s.isSynced)),
   );
+  // When a separate dustCtx is provided, we must use its facade for dust balancing
+  // because the owner facade (ctx) doesn't have the dust payer's dust coins.
+  const useSeparateDust = !!dustCtx;
   const dustSecretKey = dustCtx ? dustCtx.dustSecretKey : ctx.dustSecretKey;
   return {
     getCoinPublicKey() { return state.shielded.coinPublicKey.toHexString(); },
     getEncryptionPublicKey() { return state.shielded.encryptionPublicKey.toHexString(); },
     async balanceTx(tx: any, ttl?: Date) {
+      const expiry = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
+
+      if (useSeparateDust) {
+        // Step 1: Owner balances shielded + unshielded (no dust)
+        const ownerRecipe = await (ctx.facade as any).balanceUnboundTransaction(
+          tx,
+          { shieldedSecretKeys: ctx.shieldedSecretKeys, dustSecretKey: ctx.dustSecretKey },
+          { ttl: expiry, tokenKindsToBalance: ['shielded', 'unshielded'] },
+        );
+        // Step 2: DustPayer balances dust using the base transaction from step 1
+        const baseTx = ownerRecipe.baseTransaction ?? tx;
+        const txsToBalance = ownerRecipe.balancingTransaction
+          ? [baseTx, ownerRecipe.balancingTransaction]
+          : [baseTx];
+        const dustBalancingTx = await (dustCtx!.facade as any).dust.balanceTransactions(
+          dustSecretKey, txsToBalance, expiry,
+        );
+        // Step 3: Merge into final recipe
+        const mergedBalancing = (ctx.facade as any).mergeUnprovenTransactions(
+          ownerRecipe.balancingTransaction, dustBalancingTx,
+        );
+        const finalRecipe = {
+          type: 'UNBOUND_TRANSACTION',
+          baseTransaction: baseTx,
+          balancingTransaction: mergedBalancing ?? undefined,
+        };
+        const signFn = (payload: Uint8Array) => ctx.unshieldedKeystore.signData(payload);
+        const signedRecipe = await (ctx.facade as any).signRecipe(finalRecipe, signFn);
+        return (ctx.facade as any).finalizeRecipe(signedRecipe);
+      }
+
+      // No separate dust payer — standard single-wallet flow
       const recipe = await (ctx.facade as any).balanceUnboundTransaction(
         tx,
         { shieldedSecretKeys: ctx.shieldedSecretKeys, dustSecretKey },
-        { ttl: ttl ?? new Date(Date.now() + 30 * 60 * 1000) },
+        { ttl: expiry },
       );
       const signFn = (payload: Uint8Array) => ctx.unshieldedKeystore.signData(payload);
       const signedRecipe = await (ctx.facade as any).signRecipe(recipe, signFn);
