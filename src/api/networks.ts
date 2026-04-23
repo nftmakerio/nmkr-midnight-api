@@ -100,9 +100,9 @@ const DEFAULT_ENDPOINTS: Record<NetworkName, { indexerHttp: string; indexerWs: s
     nodeRpc: 'https://rpc.preprod.midnight.network',
   },
   mainnet: {
-    indexerHttp: 'https://indexer.midnight.network/api/v4/graphql',
-    indexerWs: 'wss://indexer.midnight.network/api/v4/graphql/ws',
-    nodeRpc: 'https://rpc.midnight.network',
+    indexerHttp: 'https://indexer.mainnet.midnight.network/api/v4/graphql',
+    indexerWs: 'wss://indexer.mainnet.midnight.network/api/v4/graphql/ws',
+    nodeRpc: 'https://rpc.mainnet.midnight.network',
   },
 };
 
