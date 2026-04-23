@@ -30,7 +30,7 @@ import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-pri
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
 import * as Rx from 'rxjs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as bip39 from 'bip39';
 import { type NetworkConfig, ACTIVE_NETWORK } from './networks.js';
 import { walletManager, type WalletContext } from './wallet-manager.js';
@@ -563,7 +563,7 @@ export async function deployAndMintNft(params: {
   checkLen('image', collImage);
   checkLen('mediaType', collMedia);
 
-  const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
+  const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
   const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
@@ -633,7 +633,7 @@ export async function deployAndMintNft(params: {
 export async function queryNftContract(contractAddress: string) {
   const cfg = activeNetwork();
 
-  const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
+  const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
   const ledgerParser = contractModule.ledger;
 
   const provider = indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs);
@@ -847,7 +847,7 @@ export async function createCollection(params: {
   const seed = params.seed || Buffer.from(generateRandomSeed()).toString('hex');
   const walletInfo = getWalletInfo(seed);
 
-  const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
+  const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
   const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
@@ -946,7 +946,7 @@ export async function mintNft(params: {
   // Mint on existing contract
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
 
-  const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
+  const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
   const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
@@ -1021,7 +1021,7 @@ export async function transferNft(params: {
   const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
   if (!resolvedTo) throw new Error('Either toCoinPublicKey or toShieldedAddress is required');
 
-  const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
+  const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
   const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
@@ -1088,7 +1088,7 @@ async function callContract<T>(
   dustSeed?: string,
 ): Promise<{ result: T; coinPublicKey: string }> {
   const cfg = activeNetwork();
-  const contractModule = await import(path.join(CONTRACT_PATH, 'contract', 'index.js'));
+  const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
   const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
     CompiledContract.withVacantWitnesses,
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),

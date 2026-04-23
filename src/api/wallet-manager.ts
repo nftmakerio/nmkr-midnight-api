@@ -152,15 +152,35 @@ class WalletManager {
     const saved = this.loadFromDisk();
     console.log(`[WalletManager] Loading ${saved.length} watched wallet(s) sequentially...`);
 
-    // Connect wallets one by one. Parallel connections overwhelm the indexer
-    // (10 simultaneous WebSocket subscriptions cause all to stall).
-    // Sequential with cache: ~5s each. Without cache: ~30-60s each.
-    for (const info of saved) {
+    // Connect and sync wallets one by one. The indexer can't handle many
+    // simultaneous WebSocket subscriptions — they all stall.
+    // Each wallet syncs fully before the next one starts.
+    for (let i = 0; i < saved.length; i++) {
+      const info = saved[i];
+      const label = info.label || info.seed.substring(0, 12) + '...';
       try {
-        await this.connect(info);
-        console.log(`[WalletManager] Connected: ${info.label || info.seed.substring(0, 12)}...`);
+        console.log(`[WalletManager] (${i + 1}/${saved.length}) Connecting ${label}...`);
+        const managed = await this.connect(info);
+        // Wait for this wallet to sync before starting the next one
+        if (managed.ctx) {
+          const syncStart = Date.now();
+          await Rx.firstValueFrom(
+            managed.ctx.facade.state().pipe(
+              Rx.filter((s: any) => {
+                const connected = s.unshielded?.progress?.isConnected === true;
+                const hasData = (s.unshielded?.availableCoins?.length > 0) || (Number(s.unshielded?.progress?.appliedId ?? 0) > 0);
+                return connected && hasData;
+              }),
+              Rx.timeout(60_000), // max 60s per wallet
+            ),
+          ).catch(() => {
+            console.log(`[WalletManager] (${i + 1}/${saved.length}) ${label} sync timeout — continuing`);
+          });
+          const syncTime = Math.round((Date.now() - syncStart) / 1000);
+          console.log(`[WalletManager] (${i + 1}/${saved.length}) ${label} synced in ${syncTime}s`);
+        }
       } catch (err: any) {
-        console.error(`[WalletManager] Failed to connect ${info.seed.substring(0, 12)}...: ${err.message}`);
+        console.error(`[WalletManager] Failed to connect ${label}: ${err.message}`);
         this.addSuspended(info);
       }
     }
