@@ -228,6 +228,7 @@ class WalletManager {
     this.unindexAddresses(managed);
     await this.disconnect(seed);
     this.wallets.delete(seed);
+    this.deleteCachedState(seed);
     this.saveToDisk();
     return true;
   }
@@ -646,6 +647,17 @@ class WalletManager {
       }
     } catch {}
     return null;
+  }
+
+  // Delete cached state from disk (called on remove)
+  private deleteCachedState(seed: string) {
+    try {
+      const cacheFile = path.join(STATE_CACHE_DIR, `${seed.substring(0, 16)}.json`);
+      if (fs.existsSync(cacheFile)) {
+        fs.unlinkSync(cacheFile);
+        console.log(`[WalletManager] Cache deleted for ${seed.substring(0, 12)}...`);
+      }
+    } catch {}
   }
 
   // Creates a wallet context. If serialized state is available, uses restore()

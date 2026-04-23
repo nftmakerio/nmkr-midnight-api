@@ -650,9 +650,20 @@ app.get('/api/transaction/:txHash', async (req, res) => {
   }
 });
 
+function validateSeed(seed: string, fieldName = 'seed'): string | null {
+  if (!seed) return `${fieldName} is required`;
+  if (!/^[0-9a-fA-F]+$/.test(seed)) return `${fieldName} must be a hex string`;
+  if (seed.length < 64) return `${fieldName} is too short (${seed.length} hex chars, minimum 64)`;
+  if (seed.length > 128) return `${fieldName} is too long (${seed.length} hex chars, maximum 128)`;
+  return null;
+}
+
 app.post('/api/nft/create-collection', async (req, res) => {
   try {
     const { seed, collection, symbol, transferable, image, mediaType, dustSeed } = req.body;
+    const seedErr = validateSeed(seed, 'seed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    if (dustSeed) { const dErr = validateSeed(dustSeed, 'dustSeed'); if (dErr) return res.status(400).json({ error: dErr }); }
     if (!collection || !symbol) return res.status(400).json({ error: 'collection and symbol are required' });
     res.json(await createCollection({ seed, collection, symbol, transferable, image, mediaType, dustSeed }));
   } catch (err: any) {
@@ -669,7 +680,10 @@ app.post('/api/nft/mint', async (req, res) => {
       collection, symbol, transferable, collectionImage, collectionMediaType,
       dustSeed,
     } = req.body;
-    if (!ownerSeed || !uri || !name) return res.status(400).json({ error: 'ownerSeed, uri and name are required' });
+    const seedErr = validateSeed(ownerSeed, 'ownerSeed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    if (dustSeed) { const dErr = validateSeed(dustSeed, 'dustSeed'); if (dErr) return res.status(400).json({ error: dErr }); }
+    if (!uri || !name) return res.status(400).json({ error: 'uri and name are required' });
     res.json(await mintNft({
       ownerSeed, contractAddress, uri, name, image, mediaType,
       toCoinPublicKey, toShieldedAddress,
