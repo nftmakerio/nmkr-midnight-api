@@ -151,7 +151,11 @@ swaggerSpec.paths = {
   '/api/wallet/create': {
     post: {
       tags: ['Wallet'], summary: 'Create new wallet',
-      description: 'Generates a new seed and derives all addresses.',
+      description: 'Generates a new seed and derives all addresses. Optionally adds it to the watch list.',
+      requestBody: { required: false, content: { 'application/json': { schema: { type: 'object', properties: {
+        addToWatchlist: { type: 'boolean', description: 'Automatically add to watch list (default: false)' },
+        label: { type: 'string', description: 'Optional label for the watch list entry' },
+      } } } } },
       responses: { 200: { description: 'Wallet created', content: { 'application/json': { schema: { type: 'object', properties: {
         seed: { type: 'string', description: 'Hex seed (SECRET!)' },
         mnemonic: { type: 'string', description: '24-word recovery phrase (SECRET!)' },
@@ -159,6 +163,7 @@ swaggerSpec.paths = {
         shieldedAddress: { type: 'string' },
         unshieldedAddress: { type: 'string' },
         network: { type: 'string' },
+        watching: { type: 'boolean', description: 'Whether the wallet was added to the watch list' },
       } } } } } },
     },
   },
@@ -552,9 +557,16 @@ app.get('/api-docs.json', (_req, res) => res.json(swaggerSpec));
 
 // ---- Routes ----
 
-app.post('/api/wallet/create', async (_req, res) => {
-  try { res.json(await createNewWallet()); }
-  catch (err: any) { res.status(500).json({ error: err.message }); }
+app.post('/api/wallet/create', async (req, res) => {
+  try {
+    const wallet = await createNewWallet();
+    const addToWatchlist = req.body?.addToWatchlist === true;
+    if (addToWatchlist) {
+      const label = req.body?.label || undefined;
+      await walletManager.add(wallet.seed, label);
+    }
+    res.json({ ...wallet, watching: addToWatchlist });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/wallet/info', (req, res) => {
