@@ -124,10 +124,7 @@ function getAddresses(seed: string, networkId: string) {
 
 // Full sync: all components (shielded, unshielded, dust) are complete.
 // Used for operations that need shielded state (mint, transfer, approve).
-const isFullySynced = (s: any) =>
-  s.isSynced === true ||
-  s.shielded?.progress?.isStrictlyComplete === true ||
-  s.shielded?.progress?.isCompleteWithin === true;
+const isFullySynced = (s: any) => s.isSynced === true;
 
 // Fast sync: unshielded UTXOs and dust coins are loaded.
 // Sufficient for balance, UTXOs, transactions queries.
@@ -356,12 +353,17 @@ class WalletManager {
     try { up = m.lastState?.unshielded?.progress; } catch {}
     try { dp = m.lastState?.dust?.progress; } catch {}
 
+    // Shielded & Dust use: appliedIndex, highestRelevantWalletIndex, isConnected
+    // Unshielded uses: appliedId, highestTransactionId, isConnected
     const shieldedApplied = Number(sp?.appliedIndex ?? 0);
-    const shieldedHighest = Number(sp?.highestIndex ?? 0);
+    const shieldedHighest = Number(sp?.highestRelevantWalletIndex ?? 0);
+    const shieldedSynced = sp?.isStrictlyComplete?.() ?? false;
     const unshieldedApplied = Number(up?.appliedId ?? 0);
     const unshieldedHighest = Number(up?.highestTransactionId ?? 0);
+    const unshieldedSynced = up?.isStrictlyComplete?.() ?? false;
     const dustApplied = Number(dp?.appliedIndex ?? 0);
-    const dustHighest = Number(dp?.highestIndex ?? 0);
+    const dustHighest = Number(dp?.highestRelevantWalletIndex ?? 0);
+    const dustSynced = dp?.isStrictlyComplete?.() ?? false;
 
     return {
       label: m.info.label,
@@ -379,22 +381,32 @@ class WalletManager {
         utxoCount,
       },
       syncProgress: {
+        // Overall percent: sum of all applied / sum of all highest (only when highest > 0)
+        percent: (() => {
+          const totalHighest = shieldedHighest + unshieldedHighest + dustHighest;
+          if (totalHighest === 0) return m.synced ? 100 : null;
+          const totalApplied = shieldedApplied + unshieldedApplied + dustApplied;
+          return Math.min(100, Math.round(totalApplied / totalHighest * 100));
+        })(),
         shielded: {
           applied: shieldedApplied,
           highest: shieldedHighest,
-          percent: shieldedHighest > 0 ? Math.round(shieldedApplied / shieldedHighest * 100) : (m.synced ? 100 : null),
+          percent: shieldedHighest > 0 ? Math.min(100, Math.round(shieldedApplied / shieldedHighest * 100)) : (shieldedSynced ? 100 : null),
+          synced: shieldedSynced,
           connected: sp?.isConnected ?? false,
         },
         unshielded: {
           applied: unshieldedApplied,
           highest: unshieldedHighest,
-          percent: unshieldedHighest > 0 ? Math.round(unshieldedApplied / unshieldedHighest * 100) : null,
+          percent: unshieldedHighest > 0 ? Math.min(100, Math.round(unshieldedApplied / unshieldedHighest * 100)) : (unshieldedSynced ? 100 : null),
+          synced: unshieldedSynced,
           connected: up?.isConnected ?? false,
         },
         dust: {
           applied: dustApplied,
           highest: dustHighest,
-          percent: dustHighest > 0 ? Math.round(dustApplied / dustHighest * 100) : null,
+          percent: dustHighest > 0 ? Math.min(100, Math.round(dustApplied / dustHighest * 100)) : (dustSynced ? 100 : null),
+          synced: dustSynced,
           connected: dp?.isConnected ?? false,
         },
       },
@@ -466,21 +478,7 @@ class WalletManager {
       next: (state: any) => {
         managed.lastState = state;
         managed.reconnectAttempts = 0;
-        // Consider synced if:
-        // 1. SDK says fully synced, OR
-        // 2. We're connected AND have unshielded data loaded
-        // Don't mark as synced if not connected (applied=0, connected=false)
-        const isConnected =
-          state.unshielded?.progress?.isConnected === true ||
-          state.shielded?.progress?.isConnected === true ||
-          state.dust?.progress?.isConnected === true;
-        const hasData =
-          (state.unshielded?.availableCoins?.length > 0) ||
-          (Number(state.unshielded?.progress?.appliedId ?? 0) > 0);
-
-        managed.synced =
-          isFullySynced(state) ||
-          (isConnected && hasData);
+        managed.synced = isFullySynced(state);
       },
       error: (err) => {
         const msg = err?.message || err?.toString?.() || '';
