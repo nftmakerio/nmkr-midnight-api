@@ -610,7 +610,7 @@ export async function deployAndMintNft(params: {
 
     return {
       contractAddress,
-      tokenId: mintResult.public?.result?.toString() ?? '0',
+      tokenId: mintResult.private?.result?.toString() ?? '0',
       owner: resolvedTo || coinPublicKey,
       uri: params.uri,
       name: params.name,
@@ -995,7 +995,7 @@ export async function mintNft(params: {
 
     return {
       contractAddress: params.contractAddress,
-      tokenId: mintResult.public?.result?.toString() ?? '?',
+      tokenId: mintResult.private?.result?.toString() ?? '?',
       owner: resolvedTo || coinPublicKey,
       uri: params.uri,
       name: params.name,
