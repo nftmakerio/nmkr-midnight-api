@@ -12,7 +12,6 @@ import { HDWallet, Roles, generateRandomSeed } from '@midnight-ntwrk/wallet-sdk-
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
 import {
   createKeystore,
-  InMemoryTransactionHistoryStorage,
   PublicKey,
   UnshieldedWallet,
   type UnshieldedKeystore,
@@ -585,7 +584,6 @@ export async function deployAndMintNft(params: {
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
         privateStateStoreName: `nft-state-${Date.now()}`,
-        walletProvider: bridge,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
@@ -865,7 +863,6 @@ export async function createCollection(params: {
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
         privateStateStoreName: `nft-collection-${Date.now()}`,
-        walletProvider: bridge,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
@@ -969,7 +966,6 @@ export async function mintNft(params: {
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
         privateStateStoreName: `nft-mint-${Date.now()}`,
-        walletProvider: bridge,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
@@ -1040,7 +1036,6 @@ export async function transferNft(params: {
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
         privateStateStoreName: `nft-transfer-${Date.now()}`,
-        walletProvider: bridge,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
@@ -1106,7 +1101,6 @@ async function callContract<T>(
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
         privateStateStoreName: `nft-call-${Date.now()}`,
-        walletProvider: bridge,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),

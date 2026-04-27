@@ -95,7 +95,7 @@ npm install
 
 ```bash
 docker run -d --name midnight-proof-server -p 6300:6300 \
-  midnightntwrk/proof-server:7.0.0 midnight-proof-server -v
+  midnightntwrk/proof-server:8.0.3 midnight-proof-server -v
 ```
 
 One proof server handles all networks.
@@ -327,7 +327,7 @@ The NFT contract (`contracts/nmkr-nft.compact`) supports:
 - **Midnight SDK** — wallet-sdk-facade 3.0.0, midnight-js 4.0.4, ledger-v8 8.0.3, compact-js 2.5.0
 - **Compact** — Smart contract language v0.22.0, compiler v0.30.0, runtime 0.15.0
 - **Express** — REST API with Swagger UI, request logging with secret masking
-- **Docker** — Proof server (midnightntwrk/proof-server:7.0.0)
+- **Docker** — Proof server (midnightntwrk/proof-server:8.0.3)
 
 ## License
 

@@ -21,11 +21,11 @@ import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
 import {
   createKeystore,
-  InMemoryTransactionHistoryStorage,
   PublicKey,
   UnshieldedWallet,
   type UnshieldedKeystore,
 } from '@midnight-ntwrk/wallet-sdk-unshielded-wallet';
+import { NoOpTransactionHistoryStorage } from '@midnight-ntwrk/wallet-sdk-abstractions';
 import {
   ShieldedCoinPublicKey, ShieldedEncryptionPublicKey,
   ShieldedAddress, MidnightBech32m,
@@ -124,7 +124,25 @@ function getAddresses(seed: string, networkId: string) {
 
 // Full sync: all components (shielded, unshielded, dust) are complete.
 // Used for operations that need shielded state (mint, transfer, approve).
-const isFullySynced = (s: any) => s.isSynced === true;
+// Synced means: SDK strictly reports synced, OR all 3 sub-wallets are connected
+// and within a small block gap (chain may produce blocks faster than we apply them).
+const isFullySynced = (s: any) => {
+  if (s.isSynced === true) return true;
+  const sh = s.shielded?.progress;
+  const ush = s.unshielded?.progress;
+  const dst = s.dust?.progress;
+  if (!sh?.isConnected || !ush?.isConnected || !dst?.isConnected) return false;
+  const gap = (applied: bigint | undefined, highest: bigint | undefined) => {
+    const a = Number(applied ?? 0n);
+    const h = Number(highest ?? 0n);
+    return Math.abs(h - a);
+  };
+  return (
+    gap(sh.appliedIndex, sh.highestRelevantWalletIndex) <= 50 &&
+    gap(ush.appliedId, ush.highestTransactionId) <= 50 &&
+    gap(dst.appliedIndex, dst.highestRelevantWalletIndex) <= 50
+  );
+};
 
 // Fast sync: unshielded UTXOs and dust coins are loaded.
 // Sufficient for balance, UTXOs, transactions queries.
@@ -691,8 +709,8 @@ class WalletManager {
         ? ShieldedWallet({ ...config }).restore(cached.shielded)
         : ShieldedWallet({ ...config }).startWithSecretKeys(shieldedSecretKeys),
       unshielded: (config: any) => useRestore
-        ? UnshieldedWallet({ ...config, txHistoryStorage: new InMemoryTransactionHistoryStorage() }).restore(cached.unshielded)
-        : UnshieldedWallet({ ...config, txHistoryStorage: new InMemoryTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
+        ? UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached.unshielded)
+        : UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
       dust: (config: any) => useRestore
         ? DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 } }).restore(cached.dust)
         : DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 } }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
