@@ -280,7 +280,6 @@ export async function getVersionInfo() {
       indexerReachable,
       proofServer: cfg.proofServer,
       proofServerVersion,
-      blockfrost: cfg.blockfrostProjectId ? { enabled: true, projectId: cfg.blockfrostProjectId.substring(0, 8) + '...' } : { enabled: false },
     },
     tooling: {
       compactc,

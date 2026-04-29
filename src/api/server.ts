@@ -32,7 +32,7 @@ import {
   setApprovalForAllNft,
   burnNft,
 } from './midnight-service.js';
-import { ACTIVE_NETWORK, PUBLIC_API_URL, PORT } from './networks.js';
+import { ACTIVE_NETWORK, PUBLIC_API_URL, PORT, checkIndexerAndFallback } from './networks.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
 
 // Prevent unhandled rejections from crashing the process
@@ -846,7 +846,7 @@ app.get('/api/health', (_req, res) => {
 
 // Initialize wallet manager (reconnect watched wallets), then start server
 addressWatcher.initialize();
-walletManager.initialize().then(() => {
+checkIndexerAndFallback().then(() => walletManager.initialize()).then(() => {
   app.listen(PORT, () => {
     console.log('');
     console.log('=== Midnight API Server ===');

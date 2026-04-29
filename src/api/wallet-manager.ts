@@ -40,10 +40,6 @@ import { type NetworkConfig, ACTIVE_NETWORK } from './networks.js';
 // @ts-expect-error: Needed for GraphQL subscriptions
 globalThis.WebSocket = WebSocket;
 
-// Set up Blockfrost auth if configured (wraps fetch + WebSocket)
-import { setupBlockfrostAuth } from './blockfrost-auth.js';
-setupBlockfrostAuth();
-
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WATCH_FILE = path.resolve(__dirname, `../../watched-wallets.${ACTIVE_NETWORK.networkId}.json`);
 const ADDRESS_WATCH_FILE = path.resolve(__dirname, `../../watched-addresses.${ACTIVE_NETWORK.networkId}.json`);
@@ -500,15 +496,35 @@ class WalletManager {
       },
       error: (err) => {
         const msg = err?.message || err?.toString?.() || '';
-        const isParsingError = msg.includes('deserialize') || msg.includes('serialize');
+        // Recognize parsing failures from any of the SDK formats:
+        // - "Could not deserialize..." (legacy)
+        // - Effect Schema parse errors (newer SDK), tagged Wallet.Sync / Wallet.TransactionHistory
+        // - v9 event parse errors ("midnight:event[v9]")
+        const isParsingError =
+          msg.includes('deserialize') ||
+          msg.includes('serialize') ||
+          msg.includes('ParseError') ||
+          msg.includes('event[v9]') ||
+          msg.includes('unreachable') ||
+          msg.includes('Failed to decode ledger event') ||
+          err?._tag === 'Wallet.Sync' ||
+          err?._tag === 'Wallet.Other' ||
+          err?._tag === 'Wallet.TransactionHistory' ||
+          err?.cause?._tag === 'Wallet.Sync' ||
+          err?.cause?._tag === 'Wallet.Other' ||
+          err?.cause?._tag === 'Wallet.TransactionHistory';
 
         // Check if we actually have a working connection
         const wasConnected =
           managed.lastState?.unshielded?.progress?.isConnected === true ||
-          managed.lastState?.shielded?.progress?.isConnected === true;
+          managed.lastState?.shielded?.progress?.isConnected === true ||
+          managed.lastState?.dust?.progress?.isConnected === true;
 
         if (isParsingError && wasConnected) {
-          // Non-fatal: SDK can't parse some events but connection is alive
+          // Non-fatal: SDK can't parse some events but connection is alive.
+          // We log once but don't reconnect — reconnect would loop forever
+          // since the bad event is on-chain and would be hit again.
+          console.warn(`[WalletManager] Skipping unparseable event for ${managed.info.seed.substring(0, 12)}...: ${msg.substring(0, 100)}`);
           return;
         }
 
@@ -592,10 +608,17 @@ class WalletManager {
     const managed = this.wallets.get(seed);
     if (managed?.ctx) {
       // Serialize state before stopping — allows fast restore later
-      this.serializeWalletState(managed);
-      try { await managed.ctx.facade.stop(); } catch {}
+      try { this.serializeWalletState(managed); } catch {}
+      // facade.stop() can hang indefinitely when the SDK is stuck in an internal
+      // loop (e.g. WASM error or broken event stream). Race with a 3s timeout
+      // and abandon the facade — GC will clean it up.
+      const ctx = managed.ctx;
       managed.ctx = null;
       managed.synced = false;
+      Promise.race([
+        ctx.facade.stop().catch(() => {}),
+        new Promise(resolve => setTimeout(resolve, 3000)),
+      ]).catch(() => {});
     }
   }
 
@@ -706,14 +729,14 @@ class WalletManager {
     const facade = await (WalletFacade as any).init({
       configuration: walletConfig,
       shielded: (config: any) => useRestore
-        ? ShieldedWallet({ ...config }).restore(cached.shielded)
-        : ShieldedWallet({ ...config }).startWithSecretKeys(shieldedSecretKeys),
+        ? ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached.shielded)
+        : ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSecretKeys(shieldedSecretKeys),
       unshielded: (config: any) => useRestore
         ? UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached.unshielded)
         : UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
       dust: (config: any) => useRestore
-        ? DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 } }).restore(cached.dust)
-        : DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 } }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
+        ? DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached.dust)
+        : DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
     }) as WalletFacade;
 
     await facade.start(shieldedSecretKeys, dustSecretKey);

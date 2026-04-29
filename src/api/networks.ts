@@ -1,9 +1,12 @@
 // =============================================================
 // Network configuration for Midnight
-// One instance = one network. Config loaded from:
-//   1. Config file: config.<network>.json (via --config or MIDNIGHT_CONFIG)
-//   2. Environment variables (MIDNIGHT_NETWORK, PORT, etc.)
-//   3. Defaults
+// One instance = one network. Config sources (in order of precedence):
+//   1. CLI args / env vars (MIDNIGHT_NETWORK, MIDNIGHT_INDEXER_HTTP, ...)
+//   2. Config file: config.<network>.json (via --config or MIDNIGHT_CONFIG)
+//   3. Public defaults
+//
+// Custom indexer/node URLs are passed by the caller — no special-casing.
+// If a custom URL fails on startup, we fall back to the public default.
 // =============================================================
 
 import fs from 'node:fs';
@@ -20,22 +23,19 @@ export interface NetworkConfig {
   indexerHttp: string;
   indexerWs: string;
   proofServer: string;
-  blockfrostProjectId?: string;
 }
-
-// ---- Load config file ----
 
 interface ConfigFile {
   network?: string;
   port?: number;
   proofServer?: string;
   apiUrl?: string;
-  blockfrostProjectId?: string;
-  nodeOptions?: string;
+  indexerHttp?: string;
+  indexerWs?: string;
+  nodeRpc?: string;
 }
 
 function loadConfigFile(): ConfigFile {
-  // Check --config CLI arg, MIDNIGHT_CONFIG env, or auto-detect from MIDNIGHT_NETWORK
   const args = process.argv;
   const configArgIdx = args.indexOf('--config');
   let configPath = '';
@@ -45,7 +45,6 @@ function loadConfigFile(): ConfigFile {
   } else if (process.env.MIDNIGHT_CONFIG) {
     configPath = process.env.MIDNIGHT_CONFIG;
   } else {
-    // Auto-detect: config.<network>.json in project root
     const network = process.env.MIDNIGHT_NETWORK || 'preprod';
     const autoPath = path.resolve(__dirname, `../../config.${network}.json`);
     if (fs.existsSync(autoPath)) configPath = autoPath;
@@ -66,29 +65,9 @@ function loadConfigFile(): ConfigFile {
 
 const configFile = loadConfigFile();
 
-// ---- Blockfrost ----
+// ---- Public defaults (fallback) ----
 
-const BLOCKFROST_PROJECT_ID = process.env.BLOCKFROST_PROJECT_ID || configFile.blockfrostProjectId || '';
-
-const BLOCKFROST_ENDPOINTS: Record<NetworkName, { indexerHttp: string; indexerWs: string; nodeRpc: string }> = {
-  preview: {
-    indexerHttp: 'https://midnight-preview.blockfrost.io/api/v0',
-    indexerWs: 'wss://midnight-preview.blockfrost.io/api/v0/ws',
-    nodeRpc: 'https://rpc.midnight-preview.blockfrost.io',
-  },
-  preprod: {
-    indexerHttp: 'https://midnight-preprod.blockfrost.io/api/v0',
-    indexerWs: 'wss://midnight-preprod.blockfrost.io/api/v0/ws',
-    nodeRpc: 'https://rpc.midnight-preprod.blockfrost.io',
-  },
-  mainnet: {
-    indexerHttp: 'https://midnight-mainnet.blockfrost.io/api/v0',
-    indexerWs: 'wss://midnight-mainnet.blockfrost.io/api/v0/ws',
-    nodeRpc: 'https://rpc.midnight-mainnet.blockfrost.io',
-  },
-};
-
-const DEFAULT_ENDPOINTS: Record<NetworkName, { indexerHttp: string; indexerWs: string; nodeRpc: string }> = {
+export const PUBLIC_ENDPOINTS: Record<NetworkName, { indexerHttp: string; indexerWs: string; nodeRpc: string }> = {
   preview: {
     indexerHttp: 'https://indexer.preview.midnight.network/api/v4/graphql',
     indexerWs: 'wss://indexer.preview.midnight.network/api/v4/graphql/ws',
@@ -113,14 +92,23 @@ if (!['preview', 'preprod', 'mainnet'].includes(envNetwork)) {
   throw new Error(`Invalid network "${envNetwork}". Must be: preview, preprod, mainnet`);
 }
 
-const endpoints = BLOCKFROST_PROJECT_ID ? BLOCKFROST_ENDPOINTS[envNetwork] : DEFAULT_ENDPOINTS[envNetwork];
+const defaults = PUBLIC_ENDPOINTS[envNetwork];
+
+// Resolve URLs: env > config file > public default
+const indexerHttp = process.env.MIDNIGHT_INDEXER_HTTP || configFile.indexerHttp || defaults.indexerHttp;
+const indexerWs = process.env.MIDNIGHT_INDEXER_WS || configFile.indexerWs || defaults.indexerWs;
+const nodeRpc = process.env.MIDNIGHT_NODE_RPC || configFile.nodeRpc || defaults.nodeRpc;
 
 export const ACTIVE_NETWORK: NetworkConfig = {
   networkId: envNetwork,
-  ...endpoints,
+  indexerHttp,
+  indexerWs,
+  nodeRpc,
   proofServer: process.env.MIDNIGHT_PROOF_SERVER || configFile.proofServer || 'http://localhost:6300',
-  blockfrostProjectId: BLOCKFROST_PROJECT_ID || undefined,
 };
+
+// Whether we are using a custom indexer (not the public default)
+export const USING_CUSTOM_INDEXER = indexerHttp !== defaults.indexerHttp;
 
 // Public URL for Swagger
 export const PUBLIC_API_URL: string =
@@ -129,3 +117,40 @@ export const PUBLIC_API_URL: string =
 // Port (used by server.ts)
 export const PORT: number =
   Number(process.env.PORT) || configFile.port || 3000;
+
+// ---- Indexer health check + fallback ----
+// If the configured indexer is unreachable on startup, fall back to the public one.
+// Call this once during server startup before any wallet operations.
+export async function checkIndexerAndFallback(): Promise<void> {
+  if (!USING_CUSTOM_INDEXER) return;
+
+  const customUrl = ACTIVE_NETWORK.indexerHttp;
+  const ok = await pingIndexer(customUrl);
+  if (ok) {
+    console.log(`[Network] Custom indexer OK: ${customUrl}`);
+    return;
+  }
+
+  console.warn(`[Network] Custom indexer unreachable: ${customUrl}`);
+  console.warn(`[Network] Falling back to public endpoints for ${envNetwork}`);
+  ACTIVE_NETWORK.indexerHttp = defaults.indexerHttp;
+  ACTIVE_NETWORK.indexerWs = defaults.indexerWs;
+  ACTIVE_NETWORK.nodeRpc = defaults.nodeRpc;
+}
+
+async function pingIndexer(url: string): Promise<boolean> {
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: '{ __typename }' }),
+      signal: ctrl.signal,
+    });
+    clearTimeout(timer);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}

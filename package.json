@@ -4,10 +4,10 @@
   "type": "module",
   "description": "REST API for the Midnight Network — wallet management, NIGHT transfers, NFT minting with Swagger UI",
   "scripts": {
-    "api": "tsx src/api/server.ts",
-    "api:preprod": "MIDNIGHT_NETWORK=preprod tsx src/api/server.ts",
-    "api:preview": "MIDNIGHT_NETWORK=preview tsx src/api/server.ts",
-    "api:mainnet": "MIDNIGHT_NETWORK=mainnet tsx src/api/server.ts",
+    "api": "NODE_OPTIONS=--max-old-space-size=16384 tsx src/api/server.ts",
+    "api:preprod": "NODE_OPTIONS=--max-old-space-size=16384 MIDNIGHT_NETWORK=preprod tsx src/api/server.ts",
+    "api:preview": "NODE_OPTIONS=--max-old-space-size=16384 MIDNIGHT_NETWORK=preview tsx src/api/server.ts",
+    "api:mainnet": "NODE_OPTIONS=--max-old-space-size=16384 MIDNIGHT_NETWORK=mainnet tsx src/api/server.ts",
     "compile": "compactc --skip-zk contracts/nmkr-nft.compact contracts/managed/nmkr-nft",
     "proof-server": "docker run -p 6300:6300 midnightntwrk/proof-server:8.0.3 midnight-proof-server -v"
   },
