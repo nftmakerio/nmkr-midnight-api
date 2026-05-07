@@ -582,7 +582,7 @@ export async function deployAndMintNft(params: {
     const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
-        privateStateStoreName: `nft-state-${Date.now()}`,
+        privateStateStoreName: `nft-state-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
@@ -697,6 +697,138 @@ export async function getUtxos(seedOrAddress: string) {
   });
 }
 
+/**
+ * Get full unshielded transaction history for an address — directly from
+ * the indexer's GraphQL subscription, without any wallet sync or seed.
+ *
+ * Returns all transactions where the address appears as input (sent) or
+ * output (received), including spent UTXOs (full history, not just current).
+ */
+export async function getAddressTransactions(address: string) {
+  const cfg = activeNetwork();
+  const wsUrl = cfg.indexerWs;
+
+  return new Promise<any>((resolve, reject) => {
+    const ws = new WebSocket(wsUrl, ['graphql-transport-ws']);
+    const hardTimeout = setTimeout(() => { try { ws.close(); } catch {} ; reject(new Error('Indexer query timeout')); }, 120_000);
+    const transactions: any[] = [];
+    let progressSeen = false;
+    let idleTimer: NodeJS.Timeout | null = null;
+
+    const finish = async () => {
+      clearTimeout(hardTimeout);
+      if (idleTimer) clearTimeout(idleTimer);
+      try { ws.close(); } catch {}
+      transactions.sort((a, b) => (b.txId ?? 0) - (a.txId ?? 0));
+
+      // Enrich each tx with full inputs/outputs (the subscription filters them
+      // to our own address, so we lose the counterparty info). We only do this
+      // for received/sent tx — self transfers have no external counterparty.
+      const enrichTasks = transactions
+        .filter(t => t.type !== 'self' && t.txHash)
+        .map(async t => {
+          try {
+            const full = await getTransaction(t.txHash);
+            const myAddr = address;
+            t.allInputs = full.inputs;
+            t.allOutputs = full.outputs;
+            t.counterparties = {
+              senders: [...new Set(full.inputs.filter((i: any) => i.from !== myAddr).map((i: any) => i.from))],
+              receivers: [...new Set(full.outputs.filter((o: any) => o.to !== myAddr).map((o: any) => o.to))],
+            };
+          } catch {}
+        });
+      await Promise.allSettled(enrichTasks);
+
+      resolve({
+        address,
+        network: cfg.networkId,
+        transactionCount: transactions.length,
+        transactions,
+      });
+    };
+
+    const resetIdle = () => {
+      if (idleTimer) clearTimeout(idleTimer);
+      // After progress is seen, close once there's been 2s of silence
+      // (subscription may still emit historical txs after the progress signal).
+      idleTimer = setTimeout(() => {
+        if (progressSeen) finish();
+      }, 2000);
+    };
+
+    ws.on('open', () => {
+      ws.send(JSON.stringify({ type: 'connection_init' }));
+    });
+    ws.on('message', (raw: any) => {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === 'connection_ack') {
+        ws.send(JSON.stringify({
+          id: '1', type: 'subscribe',
+          payload: {
+            query: `subscription S($address: UnshieldedAddress!) { unshieldedTransactions(address: $address, transactionId: null) {
+              ... on UnshieldedTransaction {
+                type: __typename
+                transaction { id hash protocolVersion block { timestamp } ... on RegularTransaction { transactionResult { status } } }
+                createdUtxos { owner tokenType value outputIndex intentHash ctime registeredForDustGeneration }
+                spentUtxos { owner tokenType value outputIndex intentHash ctime registeredForDustGeneration }
+              }
+              ... on UnshieldedTransactionsProgress { type: __typename highestTransactionId }
+            } }`,
+            variables: { address },
+          }
+        }));
+      } else if (msg.type === 'next' && msg.id === '1') {
+        const evt = msg.payload?.data?.unshieldedTransactions;
+        if (!evt) return;
+        if (evt.type === 'UnshieldedTransaction') {
+          const isReceiver = (evt.createdUtxos || []).some((u: any) => u.owner === address);
+          const isSender   = (evt.spentUtxos   || []).some((u: any) => u.owner === address);
+          const inFromMe   = (evt.spentUtxos   || []).filter((u: any) => u.owner === address);
+          const outToMe    = (evt.createdUtxos || []).filter((u: any) => u.owner === address);
+          const otherIn    = (evt.spentUtxos   || []).filter((u: any) => u.owner !== address);
+          const otherOut   = (evt.createdUtxos || []).filter((u: any) => u.owner !== address);
+
+          const totalIn  = inFromMe.reduce((s: number, u: any) => s + Number(u.value), 0);
+          const totalOut = outToMe.reduce((s: number, u: any) => s + Number(u.value), 0);
+          const netRaw   = totalOut - totalIn;
+
+          transactions.push({
+            txId: evt.transaction?.id,
+            txHash: evt.transaction?.hash,
+            timestamp: evt.transaction?.block?.timestamp ? new Date(parseInt(evt.transaction.block.timestamp)).toISOString() : null,
+            status: evt.transaction?.transactionResult?.status,
+            type: isSender && isReceiver ? 'self' : isSender ? 'sent' : 'received',
+            netAmountRaw: netRaw.toString(),
+            netAmount: netRaw / 1_000_000,
+            netFormatted: `${netRaw >= 0 ? '+' : ''}${(netRaw / 1_000_000).toFixed(6)} NIGHT`,
+            counterparties: {
+              senders:   [...new Set(otherIn.map((u: any) => u.owner))],
+              receivers: [...new Set(otherOut.map((u: any) => u.owner))],
+            },
+            myInputs:  inFromMe.map((u: any) => ({ value: u.value, night: Number(u.value) / 1_000_000, intentHash: u.intentHash, outputIndex: u.outputIndex })),
+            myOutputs: outToMe.map((u: any)  => ({ value: u.value, night: Number(u.value) / 1_000_000, intentHash: u.intentHash, outputIndex: u.outputIndex, registeredForDust: u.registeredForDustGeneration })),
+            allInputs:  (evt.spentUtxos   || []).map((u: any) => ({ from: u.owner, value: u.value, night: Number(u.value) / 1_000_000, tokenType: u.tokenType })),
+            allOutputs: (evt.createdUtxos || []).map((u: any) => ({ to: u.owner,   value: u.value, night: Number(u.value) / 1_000_000, tokenType: u.tokenType, outputIndex: u.outputIndex })),
+          });
+          resetIdle();
+        } else if (evt.type === 'UnshieldedTransactionsProgress') {
+          progressSeen = true;
+          resetIdle();
+        }
+      } else if (msg.type === 'error') {
+        clearTimeout(hardTimeout);
+        if (idleTimer) clearTimeout(idleTimer);
+        try { ws.close(); } catch {}
+        reject(new Error(`Indexer error: ${JSON.stringify(msg.payload)}`));
+      } else if (msg.type === 'complete') {
+        finish();
+      }
+    });
+    ws.on('error', (err: any) => { clearTimeout(hardTimeout); if (idleTimer) clearTimeout(idleTimer); reject(err); });
+  });
+}
+
 export async function getTransaction(txHash: string) {
   const cfg = activeNetwork();
 
@@ -761,7 +893,7 @@ export async function getTransactionHistory(seedOrAddress: string) {
     for (const [hash, data] of txMap) {
       // Try indexer lookup for full FROM/TO details
       let indexerTx: any = null;
-      try { indexerTx = await getTransaction(hash, network); } catch {}
+      try { indexerTx = await getTransaction(hash); } catch {}
 
       if (indexerTx) {
         const isSender = indexerTx.inputs.some((o: any) => o.from === myAddress);
@@ -861,7 +993,7 @@ export async function createCollection(params: {
     const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
-        privateStateStoreName: `nft-collection-${Date.now()}`,
+        privateStateStoreName: `nft-collection-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
@@ -964,7 +1096,7 @@ export async function mintNft(params: {
     const { findDeployedContract } = await import('@midnight-ntwrk/midnight-js-contracts');
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
-        privateStateStoreName: `nft-mint-${Date.now()}`,
+        privateStateStoreName: `nft-mint-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
@@ -1004,6 +1136,125 @@ export async function mintNft(params: {
   }
 }
 
+export async function mintBatchNft(params: {
+  ownerSeed: string;
+  contractAddress: string;
+  items: Array<{
+    name: string;
+    uri: string;
+    image?: string;
+    mediaType?: string;
+    toCoinPublicKey?: string;
+    toShieldedAddress?: string;
+  }>;
+  dustSeed?: string;
+}) {
+  if (!params.contractAddress) throw new Error('contractAddress is required for mintBatch');
+  if (!params.items || params.items.length === 0) throw new Error('items must contain at least one entry');
+  const cfg = activeNetwork();
+
+  // Validate all items up front
+  for (const item of params.items) {
+    if (!item.name) throw new Error('each item.name is required');
+    if (!item.uri) throw new Error('each item.uri is required');
+    checkLen('name', item.name);
+    checkLen('uri', item.uri);
+    checkLen('image', item.image || '');
+    checkLen('mediaType', item.mediaType || '');
+  }
+
+  const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
+  const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
+    CompiledContract.withVacantWitnesses,
+    CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
+  );
+
+  const { ctx, cached } = await getWalletCtx(params.ownerSeed);
+  const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.ownerSeed);
+  try {
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
+    const coinPublicKey = state.shielded.coinPublicKey.toHexString();
+    const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
+
+    const bridge = await createProviderBridge(ctx, dustCtx);
+    const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
+
+    const { findDeployedContract, withContractScopedTransaction } =
+      await import('@midnight-ntwrk/midnight-js-contracts');
+    const providers = {
+      privateStateProvider: levelPrivateStateProvider({
+        privateStateStoreName: `nft-batch-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
+        privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
+        accountId: coinPublicKey.substring(0, 32),
+      }),
+      publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
+      zkConfigProvider,
+      proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
+      walletProvider: bridge,
+      midnightProvider: bridge,
+    };
+
+    const contract = await findDeployedContract(providers, {
+      compiledContract,
+      contractAddress: params.contractAddress,
+      privateStateId: 'nftPrivateState',
+      initialPrivateState: {},
+    });
+
+    // Resolve all recipients up front
+    const resolved = params.items.map((item) => {
+      const r = resolveToCoinPublicKey(item.toCoinPublicKey, item.toShieldedAddress);
+      return r ? { bytes: Buffer.from(r, 'hex') } : ownerPubKey;
+    });
+
+    // Per-call results captured inside the scope
+    const callResults: Array<{ tokenId: string; result: any }> = [];
+
+    const finalized = await (withContractScopedTransaction as any)(
+      providers,
+      async (txCtx: any) => {
+        for (let i = 0; i < params.items.length; i++) {
+          const item = params.items[i];
+          // First argument must be the txCtx — that's how callTx routes the
+          // call through the scoped transaction instead of submitting directly.
+          const r = await (contract.callTx as any).mint(
+            txCtx,
+            resolved[i],
+            item.uri,
+            item.name,
+            item.image || '',
+            item.mediaType || '',
+          );
+          callResults.push({
+            tokenId: r.private?.result?.toString() ?? '?',
+            result: r,
+          });
+        }
+      },
+      { scopeName: `mintBatch-${params.items.length}` },
+    );
+
+    return {
+      contractAddress: params.contractAddress,
+      txHash: (finalized as any)?.public?.txHash ?? null,
+      mintedCount: callResults.length,
+      tokens: callResults.map((c, i) => ({
+        tokenId: c.tokenId,
+        name: params.items[i].name,
+        uri: params.items[i].uri,
+        image: params.items[i].image || '',
+        mediaType: params.items[i].mediaType || '',
+        owner: params.items[i].toCoinPublicKey
+          ?? (params.items[i].toShieldedAddress ? resolveToCoinPublicKey(undefined, params.items[i].toShieldedAddress) : null)
+          ?? coinPublicKey,
+      })),
+    };
+  } finally {
+    if (!cached) await ctx.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
+  }
+}
+
 export async function transferNft(params: {
   ownerSeed: string;
   contractAddress: string;
@@ -1034,7 +1285,7 @@ export async function transferNft(params: {
     const { findDeployedContract } = await import('@midnight-ntwrk/midnight-js-contracts');
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
-        privateStateStoreName: `nft-transfer-${Date.now()}`,
+        privateStateStoreName: `nft-transfer-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),
@@ -1099,7 +1350,7 @@ async function callContract<T>(
     const { findDeployedContract } = await import('@midnight-ntwrk/midnight-js-contracts');
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
-        privateStateStoreName: `nft-call-${Date.now()}`,
+        privateStateStoreName: `nft-call-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
         privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
         accountId: coinPublicKey.substring(0, 32),
       }),

@@ -22,10 +22,12 @@ import {
   transferNight,
   queryNftContract,
   getUtxos,
+  getAddressTransactions,
   getTransaction,
   getTransactionHistory,
   registerDust,
   createCollection,
+  mintBatchNft,
   mintNft,
   transferNft,
   approveNft,
@@ -653,6 +655,12 @@ app.post('/api/wallet/transactions', async (req, res) => {
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
+app.get('/api/address/:address/transactions', async (req, res) => {
+  try {
+    res.json(await getAddressTransactions(req.params.address));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/transaction/:txHash', async (req, res) => {
   try {
     res.json(await getTransaction(req.params.txHash));
@@ -702,6 +710,24 @@ app.post('/api/nft/mint', async (req, res) => {
       collection, symbol, transferable, collectionImage, collectionMediaType,
       dustSeed,
     }));
+  } catch (err: any) {
+    const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
+    res.status(status).json({ error: err.message });
+  }
+});
+
+app.post('/api/nft/mint-batch', async (req, res) => {
+  try {
+    const { ownerSeed, contractAddress, items, dustSeed } = req.body;
+    const seedErr = validateSeed(ownerSeed, 'ownerSeed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    if (dustSeed) { const dErr = validateSeed(dustSeed, 'dustSeed'); if (dErr) return res.status(400).json({ error: dErr }); }
+    if (!contractAddress) return res.status(400).json({ error: 'contractAddress is required' });
+    if (!Array.isArray(items) || items.length === 0)
+      return res.status(400).json({ error: 'items must be a non-empty array' });
+    if (items.length > 50)
+      return res.status(400).json({ error: 'items max 50 per batch (proof generation queue)' });
+    res.json(await mintBatchNft({ ownerSeed, contractAddress, items, dustSeed }));
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
     res.status(status).json({ error: err.message });
