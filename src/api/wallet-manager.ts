@@ -446,7 +446,28 @@ class WalletManager {
     setNetworkId(cfg.networkId as any);
 
     const addresses = getAddresses(info.seed, cfg.networkId);
-    const cachedState = this.loadCachedState(info.seed);
+    let cachedState = this.loadCachedState(info.seed);
+
+    // If no cache exists yet, try to bootstrap one from the MySQL event cache.
+    // This turns a many-minute initial sync into seconds for new wallets.
+    if (!cachedState || cachedState.shielded.length < 10) {
+      try {
+        const { fastSyncSerializedStates } = await import('./event-cache/fast-sync.js');
+        const bootstrap = await fastSyncSerializedStates(info.seed);
+        if (bootstrap && (bootstrap.shielded.length > 10 || bootstrap.dust.length > 10)) {
+          console.log(`[WalletManager] Fast-bootstrap for ${info.label || info.seed.substring(0, 12)}... in ${bootstrap.durationMs}ms (shielded=${bootstrap.shielded.length}B dust=${bootstrap.dust.length}B)`);
+          cachedState = { shielded: bootstrap.shielded, dust: bootstrap.dust, unshielded: '' };
+          // Persist so restart can skip the bootstrap step
+          try {
+            if (!fs.existsSync(STATE_CACHE_DIR)) fs.mkdirSync(STATE_CACHE_DIR, { recursive: true });
+            const cacheFile = path.join(STATE_CACHE_DIR, `${info.seed.substring(0, 16)}.json`);
+            fs.writeFileSync(cacheFile, JSON.stringify(cachedState));
+          } catch {}
+        }
+      } catch (err: any) {
+        // Event cache unavailable or not yet caught up — fall back to normal sync
+      }
+    }
 
     let ctx: WalletContext;
     try {

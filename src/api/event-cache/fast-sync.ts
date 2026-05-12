@@ -135,6 +135,74 @@ export async function fastSyncShielded(seedHex: string, opts: { fromIndex?: numb
 }
 
 /**
+ * Run fast-sync for BOTH shielded and dust and return serialized states
+ * that can be written to the wallet-state-cache directory. This is what
+ * the wallet manager calls when a new wallet is added — it bootstraps
+ * the cache so the regular wallet context can restore() in seconds
+ * instead of full-syncing from genesis.
+ *
+ * Returns null if MySQL is unreachable.
+ */
+export async function fastSyncSerializedStates(seedHex: string): Promise<{
+  shielded: string;
+  dust: string;
+  durationMs: number;
+} | null> {
+  const start = Date.now();
+  let shieldedSerialized = '';
+  let dustSerialized = '';
+
+  try {
+    // Shielded
+    const sh = await fastSyncShielded(seedHex, { includeState: true });
+    shieldedSerialized = sh.serializedState
+      ? (typeof sh.serializedState === 'string'
+          ? sh.serializedState
+          : Buffer.from(sh.serializedState as any).toString('hex'))
+      : '';
+
+    // Dust
+    const seedBytes = Buffer.from(seedHex, 'hex');
+    const hd = HDWallet.fromSeed(seedBytes);
+    if (hd.type === 'seedOk') {
+      const r = hd.hdWallet.selectAccount(0).selectRole(Roles.Dust).deriveKeyAt(0);
+      if (r.type === 'keyDerived') {
+        const dustSk = ledger.DustSecretKey.fromSeed(r.key);
+        const params = ledger.LedgerParameters.initialParameters().dust;
+        let state: any = new (ledger as any).DustLocalState(params);
+        const pool = getPool();
+        let fromId = 0;
+        while (true) {
+          const [rows]: any = await pool.execute(
+            `SELECT id, raw_hex FROM dust_events WHERE id > ? ORDER BY id ASC LIMIT ${BATCH_SIZE}`,
+            [fromId],
+          );
+          if (!rows?.length) break;
+          const events: any[] = [];
+          for (const r of rows) {
+            try { events.push(ledger.Event.deserialize(Buffer.from(r.raw_hex, 'hex'))); } catch {}
+          }
+          if (events.length) {
+            try { state = state.replayEvents(dustSk, events); } catch { break; }
+          }
+          fromId = rows[rows.length - 1].id;
+          if (rows.length < BATCH_SIZE) break;
+        }
+        try {
+          const ser = state.serialize();
+          dustSerialized = Buffer.from(ser).toString('hex');
+        } catch {}
+      }
+    }
+  } catch (err: any) {
+    return null;
+  }
+
+  if (!shieldedSerialized && !dustSerialized) return null;
+  return { shielded: shieldedSerialized, dust: dustSerialized, durationMs: Date.now() - start };
+}
+
+/**
  * Fast-sync the DUST wallet for a seed from cached events.
  * Returns dust balance + UTXOs without hitting the indexer.
  */
