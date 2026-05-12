@@ -869,23 +869,28 @@ export async function getTransaction(txHash: string) {
 }
 
 export async function getTransactionHistory(seedOrAddress: string) {
-  const cfg = activeNetwork();
-
-  // If an address was passed (not a seed) and it isn't in the watch list,
-  // there's nothing we can do with the wallet context — fall back to the
-  // indexer-only path which works for any address.
-  const looksLikeAddress = /^mn_(addr|shield-addr)_/.test(seedOrAddress);
-  const knownSeed = walletManager.getSeedForAddress(seedOrAddress);
-  if (looksLikeAddress && !knownSeed) {
-    // Convert shielded address to unshielded — not possible; only unshielded
-    // is supported for indexer-only history (it relies on UnshieldedAddress).
-    if (seedOrAddress.startsWith('mn_shield-addr_')) {
-      throw new Error('shielded address is not in watch list; pass a seed or unshielded address');
-    }
-    return getAddressTransactions(seedOrAddress);
+  // Always resolve to an unshielded address and fetch the full history from
+  // the indexer. No wallet sync needed, full history (sent + received).
+  let unshieldedAddress: string;
+  if (/^mn_addr_/.test(seedOrAddress)) {
+    unshieldedAddress = seedOrAddress;
+  } else if (/^mn_shield-addr_/.test(seedOrAddress)) {
+    // Shielded address alone doesn't reveal the unshielded one — needs the seed.
+    const knownSeed = walletManager.getSeedForAddress(seedOrAddress);
+    if (!knownSeed) throw new Error('shielded address is not in watch list; pass a seed or unshielded address');
+    unshieldedAddress = getWalletInfo(knownSeed).unshieldedAddress;
+  } else {
+    // Treat as a seed
+    unshieldedAddress = getWalletInfo(seedOrAddress).unshieldedAddress;
   }
+  return getAddressTransactions(unshieldedAddress);
+}
 
-  const resolvedSeed = knownSeed || seedOrAddress;
+// ---- Legacy wallet-centric history (only currently-owned UTXOs grouped by intentHash) ----
+// Kept for backward compatibility but no longer used by /api/wallet/transactions.
+export async function getWalletScopedTransactionHistory(seedOrAddress: string) {
+  const cfg = activeNetwork();
+  const resolvedSeed = walletManager.getSeedForAddress(seedOrAddress) || seedOrAddress;
   const { ctx, cached } = await getWalletCtxFast(resolvedSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
