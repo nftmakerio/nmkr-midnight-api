@@ -35,6 +35,7 @@ import {
   burnNft,
 } from './midnight-service.js';
 import { ACTIVE_NETWORK, PUBLIC_API_URL, PORT, checkIndexerAndFallback } from './networks.js';
+import { initEventCache, eventCacheSubscriber, fastSyncShielded, fastSyncDust } from './event-cache/index.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
 
 // Prevent unhandled rejections from crashing the process
@@ -866,12 +867,38 @@ app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', network: ACTIVE_NETWORK.networkId });
 });
 
+app.get('/api/event-cache/status', (_req, res) => {
+  res.json(eventCacheSubscriber.getStatus());
+});
+
+app.post('/api/sync-fast', async (req, res) => {
+  try {
+    const { seed, fromIndex, includeState } = req.body;
+    const seedErr = validateSeed(seed, 'seed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    res.json(await fastSyncShielded(seed, {
+      fromIndex: Number(fromIndex) || 0,
+      includeState: !!includeState,
+    }));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/sync-fast/dust', async (req, res) => {
+  try {
+    const { seed, fromIndex } = req.body;
+    const seedErr = validateSeed(seed, 'seed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    res.json(await fastSyncDust(seed, { fromIndex: Number(fromIndex) || 0 }));
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
 // ---- Start ----
 
 // PORT is imported from networks.ts (reads config file + env)
 
 // Initialize wallet manager (reconnect watched wallets), then start server
 addressWatcher.initialize();
+initEventCache().catch(err => console.warn(`[EventCache] init error: ${err.message}`));
 checkIndexerAndFallback().then(() => walletManager.initialize()).then(() => {
   app.listen(PORT, () => {
     console.log('');
