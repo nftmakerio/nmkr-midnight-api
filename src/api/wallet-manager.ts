@@ -761,21 +761,25 @@ class WalletManager {
       } catch { /* event cache unavailable — fall back to full sync */ }
     }
 
-    const useRestore = cached && cached!.shielded.length > 10;
+    // Restore each sub-wallet independently — partial caches are OK (the
+    // fast-bootstrap fills shielded+dust but leaves unshielded empty).
+    const useShielded   = !!(cached && cached.shielded.length   > 10);
+    const useUnshielded = !!(cached && cached.unshielded.length > 10);
+    const useDust       = !!(cached && cached.dust.length       > 10);
 
-    if (useRestore) {
-      console.log(`[WalletManager] Restoring ${seed.substring(0, 12)}... from cached state (fast delta sync)`);
+    if (useShielded || useUnshielded || useDust) {
+      console.log(`[WalletManager] Restoring ${seed.substring(0, 12)}... (shielded=${useShielded} unshielded=${useUnshielded} dust=${useDust})`);
     }
 
     const facade = await (WalletFacade as any).init({
       configuration: walletConfig,
-      shielded: (config: any) => useRestore
+      shielded: (config: any) => useShielded
         ? ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.shielded)
         : ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSecretKeys(shieldedSecretKeys),
-      unshielded: (config: any) => useRestore
+      unshielded: (config: any) => useUnshielded
         ? UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.unshielded)
         : UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
-      dust: (config: any) => useRestore
+      dust: (config: any) => useDust
         ? DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.dust)
         : DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
     }) as WalletFacade;
