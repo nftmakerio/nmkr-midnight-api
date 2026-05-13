@@ -740,8 +740,28 @@ class WalletManager {
     };
 
     // Try to restore from cached state (much faster — only delta sync)
-    const cached = serializedState || this.loadCachedState(seed);
-    const useRestore = cached && cached.shielded.length > 10;
+    let cached = serializedState || this.loadCachedState(seed);
+
+    // If no on-disk cache, try to bootstrap one from the MySQL event cache.
+    // This catches the case where a wallet is used on-demand (e.g. transfer/night
+    // with a seed that isn't in the watch list).
+    if (!cached || cached!.shielded.length < 10) {
+      try {
+        const { fastSyncSerializedStates } = await import('./event-cache/fast-sync.js');
+        const bootstrap = await fastSyncSerializedStates(seed);
+        if (bootstrap && (bootstrap.shielded.length > 10 || bootstrap.dust.length > 10)) {
+          console.log(`[WalletManager] Fast-bootstrap (on-demand) for ${seed.substring(0, 12)}... in ${bootstrap.durationMs}ms`);
+          cached = { shielded: bootstrap.shielded, dust: bootstrap.dust, unshielded: '' };
+          try {
+            if (!fs.existsSync(STATE_CACHE_DIR)) fs.mkdirSync(STATE_CACHE_DIR, { recursive: true });
+            const cacheFile = path.join(STATE_CACHE_DIR, `${seed.substring(0, 16)}.json`);
+            fs.writeFileSync(cacheFile, JSON.stringify(cached));
+          } catch {}
+        }
+      } catch { /* event cache unavailable — fall back to full sync */ }
+    }
+
+    const useRestore = cached && cached!.shielded.length > 10;
 
     if (useRestore) {
       console.log(`[WalletManager] Restoring ${seed.substring(0, 12)}... from cached state (fast delta sync)`);
@@ -750,13 +770,13 @@ class WalletManager {
     const facade = await (WalletFacade as any).init({
       configuration: walletConfig,
       shielded: (config: any) => useRestore
-        ? ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached.shielded)
+        ? ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.shielded)
         : ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSecretKeys(shieldedSecretKeys),
       unshielded: (config: any) => useRestore
-        ? UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached.unshielded)
+        ? UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.unshielded)
         : UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
       dust: (config: any) => useRestore
-        ? DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached.dust)
+        ? DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.dust)
         : DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
     }) as WalletFacade;
 
