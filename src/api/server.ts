@@ -849,17 +849,31 @@ app.get('/api/version', async (_req, res) => {
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 
+// Just delete cache files on disk. Does NOT touch running wallets.
+// They keep working until the next restart. Use this for cleanup.
 app.post('/api/watch/clear-cache', async (_req, res) => {
   try {
-    const fs = await import('node:fs');
-    const path = await import('node:path');
-    const cacheDir = path.resolve(new URL('.', import.meta.url).pathname, '../../wallet-state-cache');
-    let deleted = 0;
-    if (fs.existsSync(cacheDir)) {
-      const files = fs.readdirSync(cacheDir);
-      for (const f of files) { fs.unlinkSync(path.join(cacheDir, f)); deleted++; }
-    }
-    res.json({ status: 'ok', deletedFiles: deleted, message: `Cleared ${deleted} cache file(s). Restart API to re-sync all wallets.` });
+    const result = walletManager.clearAllCacheFiles();
+    res.json({
+      status: 'ok',
+      deletedFiles: result.deleted,
+      message: `Cleared ${result.deleted} cache file(s). Running wallets keep working; next restart will full-sync.`,
+    });
+  } catch (err: any) { res.status(500).json({ error: err.message }); }
+});
+
+// Delete cache files AND force every watched wallet to disconnect,
+// drop its state, and re-sync fresh from the chain. Use when caches
+// are stale/corrupted and you want a working state immediately.
+app.post('/api/watch/rebuild-cache', async (_req, res) => {
+  try {
+    const r = await walletManager.rebuildCache();
+    res.json({
+      status: 'ok',
+      rebuilt: r.rebuilt,
+      failed: r.failed,
+      message: `Re-syncing ${r.rebuilt} wallet(s) from the chain. Caches will be rewritten as they come back online.`,
+    });
   } catch (err: any) { res.status(500).json({ error: err.message }); }
 });
 

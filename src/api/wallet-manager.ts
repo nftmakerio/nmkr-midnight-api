@@ -89,7 +89,7 @@ interface ManagedWallet {
   };
 }
 
-const STATE_CACHE_DIR = path.resolve(__dirname, `../../wallet-state-cache-${ACTIVE_NETWORK.networkId}`);
+export const STATE_CACHE_DIR = path.resolve(__dirname, `../../wallet-state-cache-${ACTIVE_NETWORK.networkId}`);
 
 // ---- Helpers ----
 
@@ -246,6 +246,57 @@ class WalletManager {
 
   get(seed: string): ManagedWallet | null {
     return this.wallets.get(seed) || null;
+  }
+
+  /**
+   * Disconnect every watched wallet, delete its on-disk cache file, then
+   * reconnect — forcing a fresh sync from the chain. Use this when cache
+   * files are stale or corrupted (e.g. after an SDK upgrade or after the
+   * fast-bootstrap left bad bytes behind).
+   */
+  async rebuildCache(): Promise<{ rebuilt: number; failed: Array<{ seed: string; error: string }> }> {
+    const seeds = [...this.wallets.keys()];
+    let rebuilt = 0;
+    const failed: Array<{ seed: string; error: string }> = [];
+
+    for (const seed of seeds) {
+      const managed = this.wallets.get(seed);
+      if (!managed) continue;
+      try {
+        // Disconnect & drop cached state file
+        await this.disconnect(seed);
+        this.deleteCachedState(seed);
+        managed.serializedState = null;
+        managed.synced = false;
+        managed.lastState = null;
+        // Reconnect — full sync from chain since cache is gone
+        const ctx = await this.createWalletContext(seed, null);
+        managed.ctx = ctx;
+        managed.status = 'active';
+        managed.reconnectAttempts = 0;
+        this.subscribe(managed);
+        rebuilt++;
+      } catch (err: any) {
+        failed.push({ seed: seed.substring(0, 16), error: err.message ?? String(err) });
+      }
+    }
+    return { rebuilt, failed };
+  }
+
+  /** Drop all on-disk cache files without disconnecting anything. */
+  clearAllCacheFiles(): { deleted: number } {
+    let deleted = 0;
+    try {
+      if (fs.existsSync(STATE_CACHE_DIR)) {
+        for (const f of fs.readdirSync(STATE_CACHE_DIR)) {
+          if (f.endsWith('.json')) {
+            fs.unlinkSync(path.join(STATE_CACHE_DIR, f));
+            deleted++;
+          }
+        }
+      }
+    } catch {}
+    return { deleted };
   }
 
   findByAddress(address: string): ManagedWallet | null {
