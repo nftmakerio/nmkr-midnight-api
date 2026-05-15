@@ -446,28 +446,12 @@ class WalletManager {
     setNetworkId(cfg.networkId as any);
 
     const addresses = getAddresses(info.seed, cfg.networkId);
-    let cachedState = this.loadCachedState(info.seed);
-
-    // If no cache exists yet, try to bootstrap one from the MySQL event cache.
-    // This turns a many-minute initial sync into seconds for new wallets.
-    if (!cachedState || cachedState.shielded.length < 10) {
-      try {
-        const { fastSyncSerializedStates } = await import('./event-cache/fast-sync.js');
-        const bootstrap = await fastSyncSerializedStates(info.seed);
-        if (bootstrap && (bootstrap.shielded.length > 10 || bootstrap.dust.length > 10)) {
-          console.log(`[WalletManager] Fast-bootstrap for ${info.label || info.seed.substring(0, 12)}... in ${bootstrap.durationMs}ms (shielded=${bootstrap.shielded.length}B dust=${bootstrap.dust.length}B)`);
-          cachedState = { shielded: bootstrap.shielded, dust: bootstrap.dust, unshielded: '' };
-          // Persist so restart can skip the bootstrap step
-          try {
-            if (!fs.existsSync(STATE_CACHE_DIR)) fs.mkdirSync(STATE_CACHE_DIR, { recursive: true });
-            const cacheFile = path.join(STATE_CACHE_DIR, `${info.seed.substring(0, 16)}.json`);
-            fs.writeFileSync(cacheFile, JSON.stringify(cachedState));
-          } catch {}
-        }
-      } catch (err: any) {
-        // Event cache unavailable or not yet caught up — fall back to normal sync
-      }
-    }
+    const cachedState = this.loadCachedState(info.seed);
+    // Note: fast-bootstrap from MySQL is intentionally NOT plugged in here.
+    // The CoreWallet serialization we produce is the wrong format for
+    // ShieldedWallet.restore() — it would crash with "getOrThrow on a Left".
+    // Fast-sync from MySQL is exposed via /api/sync-fast endpoints for read
+    // operations only.
 
     let ctx: WalletContext;
     try {
@@ -740,29 +724,15 @@ class WalletManager {
     };
 
     // Try to restore from cached state (much faster — only delta sync)
-    let cached = serializedState || this.loadCachedState(seed);
+    const cached = serializedState || this.loadCachedState(seed);
+    // Note: MySQL-fed fast-bootstrap was tried here previously, but the
+    // CoreWallet.serialize() bytes are NOT compatible with
+    // ShieldedWallet.restore() — that produced a hard
+    // "getOrThrow called on a Left" error. We rely on SDK-produced cache
+    // files only. Fast-sync is exposed via /api/sync-fast endpoints for
+    // read operations.
 
-    // If no on-disk cache, try to bootstrap one from the MySQL event cache.
-    // This catches the case where a wallet is used on-demand (e.g. transfer/night
-    // with a seed that isn't in the watch list).
-    if (!cached || cached!.shielded.length < 10) {
-      try {
-        const { fastSyncSerializedStates } = await import('./event-cache/fast-sync.js');
-        const bootstrap = await fastSyncSerializedStates(seed);
-        if (bootstrap && (bootstrap.shielded.length > 10 || bootstrap.dust.length > 10)) {
-          console.log(`[WalletManager] Fast-bootstrap (on-demand) for ${seed.substring(0, 12)}... in ${bootstrap.durationMs}ms`);
-          cached = { shielded: bootstrap.shielded, dust: bootstrap.dust, unshielded: '' };
-          try {
-            if (!fs.existsSync(STATE_CACHE_DIR)) fs.mkdirSync(STATE_CACHE_DIR, { recursive: true });
-            const cacheFile = path.join(STATE_CACHE_DIR, `${seed.substring(0, 16)}.json`);
-            fs.writeFileSync(cacheFile, JSON.stringify(cached));
-          } catch {}
-        }
-      } catch { /* event cache unavailable — fall back to full sync */ }
-    }
-
-    // Restore each sub-wallet independently — partial caches are OK (the
-    // fast-bootstrap fills shielded+dust but leaves unshielded empty).
+    // Restore each sub-wallet independently — partial caches are OK.
     const useShielded   = !!(cached && cached.shielded.length   > 10);
     const useUnshielded = !!(cached && cached.unshielded.length > 10);
     const useDust       = !!(cached && cached.dust.length       > 10);
