@@ -28,6 +28,7 @@ import {
   registerDust,
   createCollection,
   mintBatchNft,
+  buildUnsealedMintTx,
   mintNft,
   transferNft,
   approveNft,
@@ -714,6 +715,32 @@ app.post('/api/nft/mint', async (req, res) => {
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
     res.status(status).json({ error: err.message });
+  }
+});
+
+// Build an UNSEALED mint tx — proven + signed by owner, NOT balanced.
+// Use case: dApp passes the hex to a wallet's balanceUnsealedTransaction()
+// so the user's wallet adds inputs/dust/signatures, producing an atomic tx.
+app.post('/api/nft/build-unsealed-mint', async (req, res) => {
+  try {
+    const { ownerSeed, contractAddress, name, uri, image, mediaType,
+            toCoinPublicKey, toShieldedAddress, nightRecipients } = req.body ?? {};
+    const seedErr = validateSeed(ownerSeed, 'ownerSeed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    if (!contractAddress) return res.status(400).json({ error: 'contractAddress is required' });
+    if (!name || !uri) return res.status(400).json({ error: 'name and uri are required' });
+    if (!toCoinPublicKey && !toShieldedAddress) {
+      return res.status(400).json({ error: 'toCoinPublicKey or toShieldedAddress required' });
+    }
+    if (nightRecipients && !Array.isArray(nightRecipients)) {
+      return res.status(400).json({ error: 'nightRecipients must be an array' });
+    }
+    res.json(await buildUnsealedMintTx({
+      ownerSeed, contractAddress, name, uri, image, mediaType,
+      toCoinPublicKey, toShieldedAddress, nightRecipients,
+    }));
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 

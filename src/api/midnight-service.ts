@@ -1451,6 +1451,146 @@ export async function setApprovalForAllNft(params: {
   };
 }
 
+/**
+ * Build an UNSEALED mint transaction — proven and signed by the contract
+ * owner, but NOT balanced and NOT submitted. Returns hex of a
+ * Transaction<SignatureEnabled, Proof, PreBinding> that a dApp-connector
+ * wallet can balance via `balanceUnsealedTransaction()` and then submit.
+ *
+ * Use case: atomic "user pays + server mints" flow. The server prepares
+ * this tx, the user's wallet adds NIGHT inputs / dust / signatures and
+ * submits — both succeed or both fail.
+ */
+export async function buildUnsealedMintTx(params: {
+  ownerSeed: string;
+  contractAddress: string;
+  name: string;
+  uri: string;
+  image?: string;
+  mediaType?: string;
+  toCoinPublicKey?: string;
+  toShieldedAddress?: string;
+  /**
+   * Optional: NIGHT outputs to be added to the same atomic transaction.
+   * The user's wallet will add inputs covering these via
+   * balanceUnsealedTransaction. Address must be a bech32m unshielded
+   * address (`mn_addr_<network>1...`).
+   */
+  nightRecipients?: Array<{ address: string; amountRaw: string }>;
+}) {
+  if (!params.contractAddress) throw new Error('contractAddress is required');
+  if (!params.name) throw new Error('name is required');
+  if (!params.uri) throw new Error('uri is required');
+  checkLen('name', params.name);
+  checkLen('uri', params.uri);
+  checkLen('image', params.image || '');
+  checkLen('mediaType', params.mediaType || '');
+
+  const cfg = activeNetwork();
+  const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
+
+  const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
+  const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
+    CompiledContract.withVacantWitnesses,
+    CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
+  );
+
+  const { ctx, cached } = await getWalletCtx(params.ownerSeed);
+  try {
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
+    const coinPublicKey = state.shielded.coinPublicKey.toHexString();
+    const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
+    const mintTo = resolvedTo ? { bytes: Buffer.from(resolvedTo, 'hex') } : ownerPubKey;
+
+    const bridge = await createProviderBridge(ctx);
+    const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
+    const proofProvider = httpClientProofProvider(cfg.proofServer, zkConfigProvider);
+
+    const { createUnprovenCallTx, createCallTxOptions } =
+      await import('@midnight-ntwrk/midnight-js-contracts');
+
+    const privateStateProvider = levelPrivateStateProvider({
+      privateStateStoreName: `nft-unsealed-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
+      privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
+      accountId: coinPublicKey.substring(0, 32),
+    });
+    (privateStateProvider as any).setContractAddress?.(params.contractAddress);
+    // Our nmkr-nft contract has vacant witnesses → empty private state.
+    // Seed the provider so createUnprovenCallTx finds something at that id.
+    try { await (privateStateProvider as any).set?.('nftPrivateState', {}); } catch {}
+
+    const providers = {
+      privateStateProvider,
+      publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
+      zkConfigProvider,
+      proofProvider,
+      walletProvider: bridge,
+      midnightProvider: bridge,
+    } as any;
+
+    // Build the unproven call (no balancing yet)
+    const callOptions = createCallTxOptions(
+      compiledContract as any,
+      'mint' as any,
+      params.contractAddress,
+      'nftPrivateState',
+      undefined,
+      [mintTo, params.uri, params.name, params.image || '', params.mediaType || ''] as any,
+    );
+    const unproven = await createUnprovenCallTx(providers, callOptions as any);
+
+    // Optionally add NIGHT outputs to the same intent — the user wallet
+    // will balance these by adding inputs via balanceUnsealedTransaction.
+    if (params.nightRecipients?.length) {
+      const unprovenTx = unproven.private.unprovenTx as any;
+      const intents = unprovenTx.intents as Map<number, any>;
+      if (!intents || intents.size === 0) {
+        throw new Error('unprovenTx has no intents — cannot add NIGHT outputs');
+      }
+      const [_segmentId, intent] = [...intents][0];
+      const nightTokenType = (ledger as any).unshieldedToken().raw as string;
+      const networkId = getNetworkId();
+
+      const newOutputs = params.nightRecipients.map((r) => {
+        const parsed = MidnightBech32m.parse(r.address);
+        const addr = parsed.decode(UnshieldedAddress, networkId);
+        return {
+          value: BigInt(r.amountRaw),
+          owner: addr.hexString,
+          type: nightTokenType,
+        };
+      });
+
+      const existing = intent.guaranteedUnshieldedOffer;
+      const mergedInputs  = existing?.inputs    ?? [];
+      const mergedOutputs = [...(existing?.outputs ?? []), ...newOutputs];
+      const mergedSigs    = existing?.signatures ?? [];
+      intent.guaranteedUnshieldedOffer = (ledger as any).UnshieldedOffer.new(
+        mergedInputs, mergedOutputs, mergedSigs,
+      );
+    }
+
+    // Prove (sends to proof-server)
+    const provenTx = await (proofProvider as any).proveTx(unproven.private.unprovenTx);
+
+    // Serialize the proven (but unbalanced, unsigned-by-wallet) tx as hex
+    const bytes: Uint8Array = provenTx.serialize();
+    const hex = Buffer.from(bytes).toString('hex');
+
+    return {
+      contractAddress: params.contractAddress,
+      unsealedTxHex: hex,
+      bytes: bytes.length,
+      // expose the tokenId the wallet WILL get when it submits, so the
+      // client can show it preemptively
+      tokenId: unproven.private.result?.toString() ?? null,
+      mintTo: resolvedTo || coinPublicKey,
+    };
+  } finally {
+    if (!cached) await ctx.facade.stop();
+  }
+}
+
 // Destroy a token. Only the current owner may call this.
 export async function burnNft(params: {
   ownerSeed: string;
