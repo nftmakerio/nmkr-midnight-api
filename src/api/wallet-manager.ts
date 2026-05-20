@@ -792,18 +792,38 @@ class WalletManager {
       console.log(`[WalletManager] Restoring ${seed.substring(0, 12)}... (shielded=${useShielded} unshielded=${useUnshielded} dust=${useDust})`);
     }
 
-    const facade = await (WalletFacade as any).init({
+    // Cache restore can fail with "getOrThrow called on a Left" when the
+    // serialized form is from an older SDK version. Catch that, drop the
+    // cache, and fall back to a fresh sync from secret keys.
+    const buildFacade = (useCache: boolean) => (WalletFacade as any).init({
       configuration: walletConfig,
-      shielded: (config: any) => useShielded
+      shielded: (config: any) => useCache && useShielded
         ? ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.shielded)
         : ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSecretKeys(shieldedSecretKeys),
-      unshielded: (config: any) => useUnshielded
+      unshielded: (config: any) => useCache && useUnshielded
         ? UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.unshielded)
         : UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
-      dust: (config: any) => useDust
+      dust: (config: any) => useCache && useDust
         ? DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.dust)
         : DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
-    }) as WalletFacade;
+    });
+
+    let facade: WalletFacade;
+    try {
+      facade = await buildFacade(true) as WalletFacade;
+    } catch (err: any) {
+      if (cached) {
+        console.warn(`[WalletManager] Cached restore failed for ${seed.substring(0, 12)}... (${err.message}). ` +
+          `Dropping cache and resyncing from scratch — this can take a while.`);
+        try {
+          const cacheFile = path.join(STATE_CACHE_DIR, `${seed.substring(0, 16)}.json`);
+          if (fs.existsSync(cacheFile)) fs.unlinkSync(cacheFile);
+        } catch {}
+        facade = await buildFacade(false) as WalletFacade;
+      } else {
+        throw err;
+      }
+    }
 
     await facade.start(shieldedSecretKeys, dustSecretKey);
     return { facade, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
