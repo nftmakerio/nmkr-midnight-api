@@ -1510,27 +1510,46 @@ export async function buildUnsealedMintTx(params: {
     throw new Error(`buyer address decode failed (network=${activeNetId}): ${err.message}`);
   }
 
+  // Wrap each SDK step so the user-facing error names the failing stage
+  // instead of just "getOrThrow called on a Left".
+  async function step<T>(name: string, fn: () => Promise<T> | T): Promise<T> {
+    console.log(`[buildUnsealedMintTx] step START ${name}`);
+    try {
+      const out = await fn();
+      console.log(`[buildUnsealedMintTx] step OK    ${name}`);
+      return out;
+    } catch (err: any) {
+      console.error(`[buildUnsealedMintTx] step FAIL  ${name}: ${err.message}`);
+      throw new Error(`[${name}] ${err.message}`, { cause: err });
+    }
+  }
+
   const cfg = activeNetwork();
 
-  const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
-  const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
-    CompiledContract.withVacantWitnesses,
-    CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
-  );
+  const contractModule = await step('import contract module', () =>
+    import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href));
+  const compiledContract = step('compile contract', () =>
+    CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
+      CompiledContract.withVacantWitnesses,
+      CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
+    )) as any;
 
-  const { ctx, cached } = await getWalletCtx(params.ownerSeed);
+  const { ctx, cached } = await step('getWalletCtx (restore owner wallet)',
+    () => getWalletCtx(params.ownerSeed));
   try {
-    const state: any = await Rx.firstValueFrom(ctx.facade.state());
+    const state: any = await step('read wallet state',
+      () => Rx.firstValueFrom(ctx.facade.state()));
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
     const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
     const mintTo = resolvedTo ? { bytes: Buffer.from(resolvedTo, 'hex') } : ownerPubKey;
 
-    const bridge = await createProviderBridge(ctx);
+    const bridge = await step('createProviderBridge', () => createProviderBridge(ctx));
     const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
     const proofProvider = httpClientProofProvider(cfg.proofServer, zkConfigProvider);
 
-    const { createUnprovenCallTx, createCallTxOptions } =
-      await import('@midnight-ntwrk/midnight-js-contracts');
+    const { createUnprovenCallTx, createCallTxOptions } = await step(
+      'import @midnight-ntwrk/midnight-js-contracts',
+      () => import('@midnight-ntwrk/midnight-js-contracts'));
 
     const privateStateProvider = levelPrivateStateProvider({
       privateStateStoreName: `nft-unsealed-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
@@ -1551,16 +1570,16 @@ export async function buildUnsealedMintTx(params: {
       midnightProvider: bridge,
     } as any;
 
-    // Build the unproven call (no balancing yet)
-    const callOptions = createCallTxOptions(
+    const callOptions = await step('createCallTxOptions', () => createCallTxOptions(
       compiledContract as any,
       'mint' as any,
       params.contractAddress,
       'nftPrivateState',
       undefined,
       [mintTo, params.uri, params.name, params.image || '', params.mediaType || ''] as any,
-    );
-    const unproven = await createUnprovenCallTx(providers, callOptions as any);
+    ));
+    const unproven = await step('createUnprovenCallTx',
+      () => createUnprovenCallTx(providers, callOptions as any));
 
     // Optionally add NIGHT outputs to the same intent — the user wallet
     // will balance these by adding inputs via balanceUnsealedTransaction.
@@ -1612,7 +1631,8 @@ export async function buildUnsealedMintTx(params: {
     }
 
     // Prove (sends to proof-server)
-    const provenTx = await (proofProvider as any).proveTx(unproven.private.unprovenTx);
+    const provenTx = await step('proveTx (proof-server)',
+      () => (proofProvider as any).proveTx(unproven.private.unprovenTx));
 
     // Serialize the proven (but unbalanced, unsigned-by-wallet) tx as hex
     const bytes: Uint8Array = provenTx.serialize();

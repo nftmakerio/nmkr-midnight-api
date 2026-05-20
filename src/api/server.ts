@@ -749,7 +749,7 @@ app.post('/api/nft/build-unsealed-mint', async (req, res) => {
     });
     res.status(500).json({
       error: err.message,
-      stack: err.stack?.split('\n').slice(0, 6),
+      stack: err.stack?.split('\n').slice(0, 30),
     });
   }
 });
