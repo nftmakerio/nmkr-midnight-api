@@ -465,6 +465,41 @@ swaggerSpec.paths = {
       },
     },
   },
+  '/api/nft/build-unsealed-mint': {
+    post: {
+      tags: ['NFT'], summary: 'Build an unsealed (un-balanced) mint transaction',
+      description: 'Builds and proves a mint transaction signed by the contract owner but NOT balanced. The dApp-connector wallet completes the tx via balanceUnsealedTransaction() + submitTransaction(). Use case: atomic "user pays NIGHT + server mints NFT" flow — pass optional nightRecipients to append NIGHT outputs to the same intent.',
+      requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['ownerSeed', 'contractAddress', 'name', 'uri'], properties: {
+        ownerSeed: { type: 'string', description: 'Seed of the collection owner' },
+        contractAddress: { type: 'string', description: 'Contract address of the collection' },
+        name: { type: 'string', description: 'NFT name (max 64 chars)', example: 'My NFT' },
+        uri: { type: 'string', description: 'Metadata URI (max 128 chars)', example: 'ipfs://example/token.json' },
+        image: { type: 'string', description: 'Optional per-token image URI (max 128 chars)' },
+        mediaType: { type: 'string', description: 'Optional MIME type (max 64 chars)', example: 'image/png' },
+        toCoinPublicKey: { type: 'string', description: 'Recipient CoinPublicKey (hex). Either this or toShieldedAddress is required.' },
+        toShieldedAddress: { type: 'string', description: 'Recipient shielded address (mn_shield-addr_...). Either this or toCoinPublicKey is required.' },
+        nightRecipients: {
+          type: 'array',
+          description: 'Optional NIGHT outputs added to the same atomic tx — the wallet provides matching inputs via balanceUnsealedTransaction.',
+          items: { type: 'object', required: ['address', 'amountRaw'], properties: {
+            address:   { type: 'string', description: 'Bech32m unshielded address (mn_addr_...)' },
+            amountRaw: { type: 'string', description: 'Amount in atomic NIGHT units (1 NIGHT = 1_000_000), as a BigInt-safe string' },
+          } },
+        },
+      } } } } },
+      responses: {
+        200: { description: 'Built unsealed transaction', content: { 'application/json': { schema: { type: 'object', properties: {
+          contractAddress: { type: 'string' },
+          unsealedTxHex:   { type: 'string', description: 'Hex of the proven, owner-signed, un-balanced tx — pass into wallet.balanceUnsealedTransaction()' },
+          bytes:           { type: 'integer', description: 'Length in bytes of the serialized tx' },
+          tokenId:         { type: 'string', description: 'Token id the recipient will get on submit' },
+          mintTo:          { type: 'string', description: 'Hex CoinPublicKey of the recipient' },
+        } } } } },
+        400: { description: 'Missing required fields or validation error' },
+        500: { description: 'Error (e.g. wallet restore failed, proof-server unreachable)' },
+      },
+    },
+  },
   '/api/nft/transfer': {
     post: {
       tags: ['NFT'], summary: 'Transfer an NFT to another address',
