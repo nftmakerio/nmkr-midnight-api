@@ -722,10 +722,12 @@ export async function getAddressTransactions(address: string) {
       transactions.sort((a, b) => (b.txId ?? 0) - (a.txId ?? 0));
 
       // Enrich each tx with full inputs/outputs (the subscription filters them
-      // to our own address, so we lose the counterparty info). We only do this
-      // for received/sent tx — self transfers have no external counterparty.
+      // to our own address, so we lose the counterparty info).
+      // Important: enrich 'self' too — a multi-recipient transfer where the
+      // sender also gets change comes back as type='self' but does have
+      // external recipients that we'd otherwise miss.
       const enrichTasks = transactions
-        .filter(t => t.type !== 'self' && t.txHash)
+        .filter(t => t.txHash)
         .map(async t => {
           try {
             const full = await getTransaction(t.txHash);
