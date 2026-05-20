@@ -740,7 +740,17 @@ app.post('/api/nft/build-unsealed-mint', async (req, res) => {
       toCoinPublicKey, toShieldedAddress, nightRecipients,
     }));
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error('[POST /api/nft/build-unsealed-mint] failed', {
+      contractAddress: req.body?.contractAddress,
+      name: req.body?.name,
+      toShieldedAddress: req.body?.toShieldedAddress?.slice?.(0, 35) + '…',
+      message: err.message,
+      stack: err.stack,
+    });
+    res.status(500).json({
+      error: err.message,
+      stack: err.stack?.split('\n').slice(0, 6),
+    });
   }
 });
 

@@ -1486,8 +1486,31 @@ export async function buildUnsealedMintTx(params: {
   checkLen('image', params.image || '');
   checkLen('mediaType', params.mediaType || '');
 
+  const activeNetId = getNetworkId();
+  console.log('[buildUnsealedMintTx] start', {
+    network: activeNetId,
+    contractAddress: params.contractAddress,
+    contractAddrLen: params.contractAddress.length,
+    name: params.name,
+    toShieldedAddress: params.toShieldedAddress?.slice(0, 35) + '…',
+    nightRecipients: params.nightRecipients?.map(r => ({ addr: r.address.slice(0, 35) + '…', amountRaw: r.amountRaw })),
+  });
+
+  // Resolve the buyer address — wrap so we can surface bech32m errors clearly.
+  let resolvedTo: string | undefined;
+  try {
+    resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
+  } catch (err: any) {
+    console.error('[buildUnsealedMintTx] failed to resolve buyer address', {
+      network: activeNetId,
+      toShieldedAddress: params.toShieldedAddress,
+      toCoinPublicKey: params.toCoinPublicKey,
+      err: err.message,
+    });
+    throw new Error(`buyer address decode failed (network=${activeNetId}): ${err.message}`);
+  }
+
   const cfg = activeNetwork();
-  const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
 
   const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
   const compiledContract = CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
@@ -1550,10 +1573,28 @@ export async function buildUnsealedMintTx(params: {
       const [_segmentId, intent] = [...intents][0];
       const nightTokenType = (ledger as any).unshieldedToken().raw as string;
       const networkId = getNetworkId();
+      console.log('[buildUnsealedMintTx] decoding nightRecipients', {
+        networkId,
+        count: params.nightRecipients.length,
+      });
 
-      const newOutputs = params.nightRecipients.map((r) => {
-        const parsed = MidnightBech32m.parse(r.address);
-        const addr = parsed.decode(UnshieldedAddress, networkId);
+      const newOutputs = params.nightRecipients.map((r, idx) => {
+        let parsed;
+        try {
+          parsed = MidnightBech32m.parse(r.address);
+        } catch (err: any) {
+          throw new Error(`nightRecipients[${idx}] bech32m parse failed for "${r.address}": ${err.message}`);
+        }
+        let addr;
+        try {
+          addr = parsed.decode(UnshieldedAddress, networkId);
+        } catch (err: any) {
+          throw new Error(
+            `nightRecipients[${idx}] address decode failed (network=${networkId}, addr-network=${parsed.network}): ${err.message}. ` +
+            `The recipient address "${r.address}" is on the "${parsed.network}" Midnight network, ` +
+            `but the API is running on "${networkId}". Set MIDNIGHT_NETWORK=${parsed.network} on the nmkr-midnight-api service.`,
+          );
+        }
         return {
           value: BigInt(r.amountRaw),
           owner: addr.hexString,
