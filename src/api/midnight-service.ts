@@ -1486,6 +1486,44 @@ export async function buildUnsealedMintTx(params: {
   checkLen('image', params.image || '');
   checkLen('mediaType', params.mediaType || '');
 
+  // Auto-retry: if the first attempt fails with an SDK error that *might*
+  // be caused by a stale wallet-state cache (Left, getOrThrow, ctor,
+  // restore), wipe the on-disk cache file for this owner seed and the
+  // RAM-cached managed wallet, then retry once with a fresh full sync.
+  // The retry adds minutes (cold sync) so we only run it for these
+  // specific error patterns.
+  try {
+    return await runBuildUnsealedMintTx(params);
+  } catch (err: any) {
+    const looksCacheRelated = /getOrThrow|Left|ctor|restore|fromString|decode/i.test(err?.message ?? '');
+    if (!looksCacheRelated) throw err;
+    console.warn(`[buildUnsealedMintTx] first attempt failed (${err.message}). Clearing cache and retrying once …`);
+    try {
+      const cacheFile = path.join(STATE_CACHE_DIR, `${params.ownerSeed.substring(0, 16)}.json`);
+      if (fs.existsSync(cacheFile)) {
+        fs.unlinkSync(cacheFile);
+        console.warn(`[buildUnsealedMintTx] deleted disk cache: ${cacheFile}`);
+      } else {
+        console.warn(`[buildUnsealedMintTx] no disk cache file at ${cacheFile} — retrying anyway`);
+      }
+    } catch (e: any) {
+      console.warn(`[buildUnsealedMintTx] cache delete failed: ${e.message}`);
+    }
+    return await runBuildUnsealedMintTx(params);
+  }
+}
+
+async function runBuildUnsealedMintTx(params: {
+  ownerSeed: string;
+  contractAddress: string;
+  name: string;
+  uri: string;
+  image?: string;
+  mediaType?: string;
+  toCoinPublicKey?: string;
+  toShieldedAddress?: string;
+  nightRecipients?: Array<{ address: string; amountRaw: string }>;
+}) {
   const activeNetId = getNetworkId();
   console.log('[buildUnsealedMintTx] start', {
     network: activeNetId,
