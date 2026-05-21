@@ -35,7 +35,7 @@ import {
   setApprovalForAllNft,
   burnNft,
 } from './midnight-service.js';
-import { ACTIVE_NETWORK, PUBLIC_API_URL, PORT, checkIndexerAndFallback } from './networks.js';
+import { ACTIVE_NETWORK, PUBLIC_API_URL, PORT, checkIndexerAndFallback, USING_CUSTOM_INDEXER } from './networks.js';
 import { initEventCache, eventCacheSubscriber, fastSyncShielded, fastSyncDust } from './event-cache/index.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
 
@@ -950,7 +950,15 @@ app.post('/api/watch/rebuild-cache', async (_req, res) => {
 });
 
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', network: ACTIVE_NETWORK.networkId });
+  res.json({
+    status: 'ok',
+    network: ACTIVE_NETWORK.networkId,
+    indexerHttp: ACTIVE_NETWORK.indexerHttp,
+    indexerWs:   ACTIVE_NETWORK.indexerWs,
+    nodeRpc:     ACTIVE_NETWORK.nodeRpc,
+    proofServer: ACTIVE_NETWORK.proofServer,
+    usingCustomIndexer: USING_CUSTOM_INDEXER,
+  });
 });
 
 app.get('/api/event-cache/status', (_req, res) => {

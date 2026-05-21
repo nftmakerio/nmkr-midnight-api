@@ -1524,6 +1524,10 @@ async function runBuildUnsealedMintTx(params: {
   toShieldedAddress?: string;
   nightRecipients?: Array<{ address: string; amountRaw: string }>;
 }) {
+  // Ensure the SDK's global network ID is set even if no wallet sync has
+  // run yet (fresh server start without watched-wallets path).
+  const cfg0 = activeNetwork();
+  try { setNetworkId(cfg0.networkId as any); } catch {}
   const activeNetId = getNetworkId();
   console.log('[buildUnsealedMintTx] start', {
     network: activeNetId,
@@ -1566,7 +1570,7 @@ async function runBuildUnsealedMintTx(params: {
 
   const contractModule = await step('import contract module', () =>
     import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href));
-  const compiledContract = step('compile contract', () =>
+  const compiledContract = await step('compile contract', () =>
     CompiledContract.make('nmkr-nft', contractModule.Contract).pipe(
       CompiledContract.withVacantWitnesses,
       CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
@@ -1616,6 +1620,29 @@ async function runBuildUnsealedMintTx(params: {
       undefined,
       [mintTo, params.uri, params.name, params.image || '', params.mediaType || ''] as any,
     ));
+
+    // Deep diagnostic dump before the SDK call that has been blowing up
+    // with "Cannot read properties of undefined (reading 'ctor')" — so we
+    // see exactly what's missing on the failing host.
+    try {
+      const cc = compiledContract as any;
+      const co = callOptions as any;
+      console.log('[buildUnsealedMintTx] pre-createUnprovenCallTx state:', JSON.stringify({
+        contractAddress: params.contractAddress,
+        callOptions_keys: Object.keys(co || {}),
+        callOptions_circuitName: co?.circuitId ?? co?.circuit ?? co?.name ?? co?.method ?? '(unknown)',
+        compiledContract_keys: Object.keys(cc || {}),
+        compiledContract_tag: cc?.tag ?? cc?.['Symbol(tag)'] ?? '(unknown)',
+        compiledContract_hasCtor: typeof cc?.ctor !== 'undefined',
+        compiledContract_circuits: cc?.circuits ? Object.keys(cc.circuits) : (cc?.contract?.impureCircuits ? Object.keys(cc.contract.impureCircuits) : '(none-visible)'),
+        contractModule_keys: Object.keys((contractModule as any) || {}),
+        contractModule_Contract_keys: contractModule?.Contract ? Object.keys(contractModule.Contract) : '(no Contract export)',
+        contractModule_Contract_impure: contractModule?.Contract?.impureCircuits ? Object.keys(contractModule.Contract.impureCircuits) : '(no impureCircuits)',
+      }, null, 2));
+    } catch (dbgErr: any) {
+      console.warn('[buildUnsealedMintTx] pre-call diagnostic failed:', dbgErr.message);
+    }
+
     const unproven = await step('createUnprovenCallTx',
       () => createUnprovenCallTx(providers, callOptions as any));
 
