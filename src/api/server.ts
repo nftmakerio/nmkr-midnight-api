@@ -759,7 +759,8 @@ app.post('/api/nft/mint', async (req, res) => {
 app.post('/api/nft/build-unsealed-mint', async (req, res) => {
   try {
     const { ownerSeed, contractAddress, name, uri, image, mediaType,
-            toCoinPublicKey, toShieldedAddress, nightRecipients } = req.body ?? {};
+            toCoinPublicKey, toShieldedAddress, nightRecipients,
+            nightAsSeparateIntent } = req.body ?? {};
     const seedErr = validateSeed(ownerSeed, 'ownerSeed');
     if (seedErr) return res.status(400).json({ error: seedErr });
     if (!contractAddress) return res.status(400).json({ error: 'contractAddress is required' });
@@ -773,6 +774,7 @@ app.post('/api/nft/build-unsealed-mint', async (req, res) => {
     res.json(await buildUnsealedMintTx({
       ownerSeed, contractAddress, name, uri, image, mediaType,
       toCoinPublicKey, toShieldedAddress, nightRecipients,
+      nightAsSeparateIntent: Boolean(nightAsSeparateIntent),
     }));
   } catch (err: any) {
     console.error('[POST /api/nft/build-unsealed-mint] failed', {

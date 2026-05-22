@@ -1477,6 +1477,14 @@ export async function buildUnsealedMintTx(params: {
    * address (`mn_addr_<network>1...`).
    */
   nightRecipients?: Array<{ address: string; amountRaw: string }>;
+  /**
+   * Experimental: instead of placing the NIGHT outputs inside the mint
+   * intent's guaranteedUnshieldedOffer (where they are silently dropped
+   * because the mint circuit does not declare unshieldedOutputs), build
+   * a SECOND Intent that carries only the NIGHT transfer and attach it
+   * to the same unproven transaction under a different segment id.
+   */
+  nightAsSeparateIntent?: boolean;
 }) {
   if (!params.contractAddress) throw new Error('contractAddress is required');
   if (!params.name) throw new Error('name is required');
@@ -1523,6 +1531,7 @@ async function runBuildUnsealedMintTx(params: {
   toCoinPublicKey?: string;
   toShieldedAddress?: string;
   nightRecipients?: Array<{ address: string; amountRaw: string }>;
+  nightAsSeparateIntent?: boolean;
 }) {
   // Ensure the SDK's global network ID is set even if no wallet sync has
   // run yet (fresh server start without watched-wallets path).
@@ -1654,12 +1663,14 @@ async function runBuildUnsealedMintTx(params: {
       if (!intents || intents.size === 0) {
         throw new Error('unprovenTx has no intents — cannot add NIGHT outputs');
       }
-      const [_segmentId, intent] = [...intents][0];
+      const [mintSegmentId, intent] = [...intents][0];
       const nightTokenType = (ledger as any).unshieldedToken().raw as string;
       const networkId = getNetworkId();
       console.log('[buildUnsealedMintTx] decoding nightRecipients', {
         networkId,
         count: params.nightRecipients.length,
+        mintSegmentId,
+        mode: params.nightAsSeparateIntent ? 'separate-intent' : 'mint-intent',
       });
 
       const newOutputs = params.nightRecipients.map((r, idx) => {
@@ -1686,34 +1697,50 @@ async function runBuildUnsealedMintTx(params: {
         };
       });
 
-      const existing = intent.guaranteedUnshieldedOffer;
-      const mergedInputs  = existing?.inputs    ?? [];
-      const mergedOutputs = [...(existing?.outputs ?? []), ...newOutputs];
-      const mergedSigs    = existing?.signatures ?? [];
-      console.log('[buildUnsealedMintTx] intent.guaranteedUnshieldedOffer BEFORE mutate:', {
-        existingOutputs: existing?.outputs?.length ?? 0,
-        existingInputs:  existing?.inputs?.length ?? 0,
-        newOutputsCount: newOutputs.length,
-        sampleNewOutput: newOutputs[0] ? { value: newOutputs[0].value.toString(), owner: newOutputs[0].owner } : null,
-      });
-      intent.guaranteedUnshieldedOffer = (ledger as any).UnshieldedOffer.new(
-        mergedInputs, mergedOutputs, mergedSigs,
-      );
-      // Sanity check: did the mutation stick? If the intent object is
-      // frozen/immutable, our assignment would silently fail and the proved
-      // tx would simply not contain the NIGHT outputs.
-      const after = intent.guaranteedUnshieldedOffer;
-      console.log('[buildUnsealedMintTx] intent.guaranteedUnshieldedOffer AFTER mutate:', {
-        outputs: after?.outputs?.length ?? 0,
-        inputs:  after?.inputs?.length ?? 0,
-        stuck: after?.outputs?.length === mergedOutputs.length,
-      });
-      // Double-check by reading back from the intents map (not the
-      // local reference) — proves the change propagated to the tx graph.
-      const reread = [...intents][0][1].guaranteedUnshieldedOffer;
-      console.log('[buildUnsealedMintTx] intent.guaranteedUnshieldedOffer RE-READ from intents map:', {
-        outputs: reread?.outputs?.length ?? 0,
-      });
+      if (params.nightAsSeparateIntent) {
+        // Build a SECOND Intent that only carries the NIGHT transfer —
+        // no contract call. Goes on a different segmentId so it's a
+        // distinct execution slot. Theory: an intent without a contract
+        // call doesn't have an unshieldedOutputs-authorization check to
+        // pass, so the outputs should survive prove + balance.
+        const ttl = new Date(Date.now() + 30 * 60 * 1000); // 30 min TTL
+        const transferIntent = (ledger as any).Intent.new(ttl);
+        transferIntent.guaranteedUnshieldedOffer = (ledger as any).UnshieldedOffer.new(
+          [], newOutputs, [],
+        );
+        // Pick a segmentId that's not already used by the mint intent.
+        let newSegmentId = (typeof mintSegmentId === 'number' ? mintSegmentId : 0) + 1;
+        while (intents.has(newSegmentId)) newSegmentId++;
+        intents.set(newSegmentId, transferIntent);
+        console.log('[buildUnsealedMintTx] separate transfer-only intent attached:', {
+          mintSegmentId,
+          transferSegmentId: newSegmentId,
+          outputs: newOutputs.length,
+          intentsAfter: [...intents.keys()],
+        });
+      } else {
+        // Default: mutate the mint intent's guaranteedUnshieldedOffer.
+        // Note: as discovered with tx af894bc9d5b5… these outputs are
+        // dropped by prove/chain because the mint circuit does not
+        // declare unshieldedOutputs in its ContractCallPrototype.
+        const existing = intent.guaranteedUnshieldedOffer;
+        const mergedInputs  = existing?.inputs    ?? [];
+        const mergedOutputs = [...(existing?.outputs ?? []), ...newOutputs];
+        const mergedSigs    = existing?.signatures ?? [];
+        console.log('[buildUnsealedMintTx] intent.guaranteedUnshieldedOffer BEFORE mutate:', {
+          existingOutputs: existing?.outputs?.length ?? 0,
+          existingInputs:  existing?.inputs?.length ?? 0,
+          newOutputsCount: newOutputs.length,
+        });
+        intent.guaranteedUnshieldedOffer = (ledger as any).UnshieldedOffer.new(
+          mergedInputs, mergedOutputs, mergedSigs,
+        );
+        const after = intent.guaranteedUnshieldedOffer;
+        console.log('[buildUnsealedMintTx] intent.guaranteedUnshieldedOffer AFTER mutate:', {
+          outputs: after?.outputs?.length ?? 0,
+          stuck: after?.outputs?.length === mergedOutputs.length,
+        });
+      }
     }
 
     // Prove (sends to proof-server)
