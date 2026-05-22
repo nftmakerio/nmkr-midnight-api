@@ -1690,9 +1690,30 @@ async function runBuildUnsealedMintTx(params: {
       const mergedInputs  = existing?.inputs    ?? [];
       const mergedOutputs = [...(existing?.outputs ?? []), ...newOutputs];
       const mergedSigs    = existing?.signatures ?? [];
+      console.log('[buildUnsealedMintTx] intent.guaranteedUnshieldedOffer BEFORE mutate:', {
+        existingOutputs: existing?.outputs?.length ?? 0,
+        existingInputs:  existing?.inputs?.length ?? 0,
+        newOutputsCount: newOutputs.length,
+        sampleNewOutput: newOutputs[0] ? { value: newOutputs[0].value.toString(), owner: newOutputs[0].owner } : null,
+      });
       intent.guaranteedUnshieldedOffer = (ledger as any).UnshieldedOffer.new(
         mergedInputs, mergedOutputs, mergedSigs,
       );
+      // Sanity check: did the mutation stick? If the intent object is
+      // frozen/immutable, our assignment would silently fail and the proved
+      // tx would simply not contain the NIGHT outputs.
+      const after = intent.guaranteedUnshieldedOffer;
+      console.log('[buildUnsealedMintTx] intent.guaranteedUnshieldedOffer AFTER mutate:', {
+        outputs: after?.outputs?.length ?? 0,
+        inputs:  after?.inputs?.length ?? 0,
+        stuck: after?.outputs?.length === mergedOutputs.length,
+      });
+      // Double-check by reading back from the intents map (not the
+      // local reference) — proves the change propagated to the tx graph.
+      const reread = [...intents][0][1].guaranteedUnshieldedOffer;
+      console.log('[buildUnsealedMintTx] intent.guaranteedUnshieldedOffer RE-READ from intents map:', {
+        outputs: reread?.outputs?.length ?? 0,
+      });
     }
 
     // Prove (sends to proof-server)
