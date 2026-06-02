@@ -1765,6 +1765,94 @@ async function runBuildUnsealedMintTx(params: {
   }
 }
 
+/**
+ * Build an unsealed pure NIGHT-transfer transaction (no contract call).
+ * Server constructs a Transaction with a single Intent carrying only an
+ * UnshieldedOffer of outputs (no inputs, no signatures). The buyer's
+ * wallet is expected to add the input UTXOs, sign them, balance and
+ * submit — same dance as buildUnsealedMintTx, just without the mint.
+ *
+ * Experiment: if 1AM's balanceUnsealedTransaction() does sign the
+ * inputs it adds for a transfer-only intent, this gives us a NIGHT
+ * payment as a single DAPP_SUBMIT_TRANSACTION (no MAKE_TRANSFER
+ * pending artefact). If 1AM refuses to sign (because no contract call
+ * is present), the outputs will be dropped on-chain and we know the
+ * limitation is wallet-side.
+ */
+export async function buildUnsealedNightTransfer(params: {
+  recipients: Array<{ address: string; amountRaw: string }>;
+}) {
+  if (!Array.isArray(params.recipients) || params.recipients.length === 0) {
+    throw new Error('At least one recipient is required');
+  }
+  const cfg = activeNetwork();
+  try { setNetworkId(cfg.networkId as any); } catch {}
+  const networkId = getNetworkId();
+
+  const nightTokenType = (ledger as any).unshieldedToken().raw as string;
+  const newOutputs = params.recipients.map((r, idx) => {
+    let parsed;
+    try { parsed = MidnightBech32m.parse(r.address); }
+    catch (err: any) { throw new Error(`recipients[${idx}] bech32m parse failed for "${r.address}": ${err.message}`); }
+    let addr;
+    try { addr = parsed.decode(UnshieldedAddress, networkId); }
+    catch (err: any) {
+      throw new Error(
+        `recipients[${idx}] address decode failed (network=${networkId}, addr-network=${parsed.network}): ${err.message}.`,
+      );
+    }
+    return {
+      value: BigInt(r.amountRaw),
+      owner: addr.hexString,
+      type: nightTokenType,
+    };
+  });
+
+  const ttl = new Date(Date.now() + 30 * 60 * 1000);
+  const intent = (ledger as any).Intent.new(ttl);
+  intent.guaranteedUnshieldedOffer = (ledger as any).UnshieldedOffer.new(
+    [], newOutputs, [],
+  );
+
+  // Transaction.fromParts(networkId, guaranteed, fallible, intents-or-intent)
+  // — see midnight-wallet/dust-wallet/src/Transacting.ts: passes single
+  // Intent here (not a Map), which Ledger accepts.
+  const unprovenTx = (ledger as any).Transaction.fromParts(networkId, undefined, undefined, intent);
+
+  console.log('[buildUnsealedNightTransfer] built unproven tx', {
+    networkId,
+    recipients: params.recipients.length,
+    totalRaw: newOutputs.reduce((s, o) => s + o.value, 0n).toString(),
+    ttl: ttl.toISOString(),
+  });
+
+  // Ask the proof-server to lift the tx from proof-preimage to proof form.
+  // For a pure transfer (no circuit) this is a deterministic transformation
+  // — no ZK proving work. But the header format differs (`proof-preimage`
+  // vs `proof`), and 1AM's balanceUnsealedTransaction rejects preimage.
+  const zkConfigProvider = new NodeZkConfigProvider(CONTRACT_PATH);
+  const proofProvider = httpClientProofProvider(cfg.proofServer, zkConfigProvider);
+  const provenTx = await (proofProvider as any).proveTx(unprovenTx);
+
+  console.log('[buildUnsealedNightTransfer] proven tx ready', {
+    bytes: (provenTx.serialize?.() ?? new Uint8Array()).length,
+  });
+
+  const bytes: Uint8Array = provenTx.serialize();
+  const hex = Buffer.from(bytes).toString('hex');
+
+  return {
+    unsealedTxHex: hex,
+    bytes: bytes.length,
+    recipients: params.recipients.map(r => ({
+      address: r.address,
+      amountRaw: String(r.amountRaw),
+      amountNight: Number(BigInt(r.amountRaw)) / 1_000_000,
+    })),
+    totalRaw: newOutputs.reduce((s, o) => s + o.value, 0n).toString(),
+  };
+}
+
 // Destroy a token. Only the current owner may call this.
 export async function burnNft(params: {
   ownerSeed: string;

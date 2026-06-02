@@ -29,6 +29,7 @@ import {
   createCollection,
   mintBatchNft,
   buildUnsealedMintTx,
+  buildUnsealedNightTransfer,
   mintNft,
   transferNft,
   approveNft,
@@ -781,6 +782,36 @@ app.post('/api/nft/build-unsealed-mint', async (req, res) => {
       contractAddress: req.body?.contractAddress,
       name: req.body?.name,
       toShieldedAddress: req.body?.toShieldedAddress?.slice?.(0, 35) + '…',
+      message: err.message,
+      stack: err.stack,
+    });
+    res.status(500).json({
+      error: err.message,
+      stack: err.stack?.split('\n').slice(0, 30),
+    });
+  }
+});
+
+// Build a pure NIGHT-transfer transaction (no mint, no contract call).
+// Server constructs the Intent with the transfer outputs only — buyer's
+// wallet must add inputs + dust + signatures via balanceUnsealedTransaction
+// and then submit. Experiment: see if 1AM signs an intent that does not
+// have an associated contract call.
+app.post('/api/transfer/build-unsealed-night', async (req, res) => {
+  try {
+    const { recipients } = req.body ?? {};
+    if (!Array.isArray(recipients) || recipients.length === 0) {
+      return res.status(400).json({ error: 'recipients must be a non-empty array' });
+    }
+    for (const [i, r] of recipients.entries()) {
+      if (!r?.address || !r?.amountRaw) {
+        return res.status(400).json({ error: `recipients[${i}] requires address and amountRaw` });
+      }
+    }
+    res.json(await buildUnsealedNightTransfer({ recipients }));
+  } catch (err: any) {
+    console.error('[POST /api/transfer/build-unsealed-night] failed', {
+      recipients: req.body?.recipients?.length,
       message: err.message,
       stack: err.stack,
     });
