@@ -77,6 +77,34 @@ The API is configured via environment variables — one instance per network.
 | `MIDNIGHT_PROOF_SERVER` | `http://localhost:6300` | Local proof server endpoint |
 | `PRIVATE_STATE_PASSWORD` | `Midnight-NFT-Local-Dev-2026!` | Encryption password for the local LevelDB private state store |
 | `PORT` | `3000` | HTTP port the API binds to |
+| `API_DEBUG` | _(unset)_ | Set to `1` to attach the `debug` field (see below) to **every** response, not just errors |
+
+## Debug output in responses
+
+Every response can carry a `debug` field so callers can display / log what
+happened inside the API — including deep SDK output (e.g. `Wallet.Sync`,
+WASM errors, RPC failures) that would otherwise only reach the server's
+stdout.
+
+```jsonc
+"debug": {
+  "requestId": "msompq1d-5",
+  "durationMs": 3,
+  "status": 500,
+  "errors": [{ "message": "…", "stack": "Error: …\n    at …" }],
+  "logs":   [{ "level": "error", "ts": 1723370000000, "msg": "…" }]
+}
+```
+
+When it is attached:
+
+- **Error responses (HTTP ≥ 400): always.** The thrown error (with stack) is
+  in `errors[]`; any `console.*` output during the request is in `logs[]`.
+- **Success responses: opt-in** via `?debug=1`, header `X-Debug: 1`, or the
+  `API_DEBUG=1` env var (global). Otherwise success payloads are unchanged.
+
+64-character hex seeds / secret keys are redacted from `logs`/`errors`. The
+`error` field itself is unchanged, so this is fully backwards-compatible.
 
 ## Prerequisites
 

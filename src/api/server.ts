@@ -39,6 +39,11 @@ import {
 import { ACTIVE_NETWORK, PUBLIC_API_URL, PORT, checkIndexerAndFallback, USING_CUSTOM_INDEXER } from './networks.js';
 import { initEventCache, eventCacheSubscriber, fastSyncShielded, fastSyncDust } from './event-cache/index.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
+import { installConsoleCapture, requestLogMiddleware, sendError } from './request-log.js';
+
+// Capture all console.* output per-request (incl. deep SDK errors) so it can
+// be returned in the response `debug` field. Must run before anything logs.
+installConsoleCapture();
 
 // Prevent unhandled rejections from crashing the process
 process.on('unhandledRejection', (reason: any) => {
@@ -67,6 +72,12 @@ app.use((err: any, req: any, res: any, next: any) => {
   }
   next(err);
 });
+
+// ---- Request-scoped log capture ----
+// Ties all console.* output during a request to that request and attaches it
+// as a `debug` field on the JSON response (always on errors; on success via
+// ?debug=1 / X-Debug header / API_DEBUG=1). Must wrap routes → install early.
+app.use(requestLogMiddleware);
 
 // ---- Request Logger ----
 // Logs all API calls with method, path, status, duration, and request body
@@ -606,7 +617,7 @@ app.post('/api/wallet/create', async (req, res) => {
       await walletManager.add(wallet.seed, label);
     }
     res.json({ ...wallet, watching: addToWatchlist });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/wallet/info', (req, res) => {
@@ -614,7 +625,7 @@ app.post('/api/wallet/info', (req, res) => {
     const { seed } = req.body;
     if (!seed) return res.status(400).json({ error: 'seed is required' });
     res.json(getWalletInfo(seed));
-  } catch (err: any) { res.status(400).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 400); }
 });
 
 app.post('/api/wallet/recover', (req, res) => {
@@ -622,7 +633,7 @@ app.post('/api/wallet/recover', (req, res) => {
     const { mnemonic } = req.body;
     if (!mnemonic) return res.status(400).json({ error: 'mnemonic is required' });
     res.json(recoverFromMnemonic(mnemonic));
-  } catch (err: any) { res.status(400).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 400); }
 });
 
 app.post('/api/wallet/resolve-shielded', (req, res) => {
@@ -630,13 +641,13 @@ app.post('/api/wallet/resolve-shielded', (req, res) => {
     const { shieldedAddress } = req.body;
     if (!shieldedAddress) return res.status(400).json({ error: 'shieldedAddress is required' });
     res.json(resolveShieldedAddress(shieldedAddress));
-  } catch (err: any) { res.status(400).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 400); }
 });
 
 app.get('/api/wallet/balance/:address', async (req, res) => {
   try {
     res.json(await getBalanceByAddress(req.params.address));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/wallet/balance', async (req, res) => {
@@ -650,7 +661,7 @@ app.post('/api/wallet/balance', async (req, res) => {
 
     // Not watched: full sync required (slow)
     res.json(await getBalanceBySeed(seedOrAddress));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/wallet/utxos', async (req, res) => {
@@ -658,7 +669,7 @@ app.post('/api/wallet/utxos', async (req, res) => {
     const seedOrAddress = req.body.seedOrAddress || req.body.seed;
     if (!seedOrAddress) return res.status(400).json({ error: 'seedOrAddress is required' });
     res.json(await getUtxos(seedOrAddress));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/wallet/register-dust', async (req, res) => {
@@ -666,7 +677,7 @@ app.post('/api/wallet/register-dust', async (req, res) => {
     const seedOrAddress = req.body.seedOrAddress || req.body.seed;
     if (!seedOrAddress) return res.status(400).json({ error: 'seedOrAddress is required' });
     res.json(await registerDust(seedOrAddress));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/transfer/night', async (req, res) => {
@@ -682,7 +693,7 @@ app.post('/api/transfer/night', async (req, res) => {
       }
     }
     res.json(await transferNight({ senderSeed, recipients, dustSeed }));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/wallet/transactions', async (req, res) => {
@@ -690,13 +701,13 @@ app.post('/api/wallet/transactions', async (req, res) => {
     const seedOrAddress = req.body.seedOrAddress || req.body.seed;
     if (!seedOrAddress) return res.status(400).json({ error: 'seedOrAddress is required' });
     res.json(await getTransactionHistory(seedOrAddress));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.get('/api/address/:address/transactions', async (req, res) => {
   try {
     res.json(await getAddressTransactions(req.params.address));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.get('/api/transaction/:txHash', async (req, res) => {
@@ -704,7 +715,7 @@ app.get('/api/transaction/:txHash', async (req, res) => {
     res.json(await getTransaction(req.params.txHash));
   } catch (err: any) {
     if (err.message === 'Transaction not found') return res.status(404).json({ error: 'Transaction not found' });
-    res.status(500).json({ error: err.message });
+    sendError(res, err, 500);
   }
 });
 
@@ -726,7 +737,7 @@ app.post('/api/nft/create-collection', async (req, res) => {
     res.json(await createCollection({ seed, collection, symbol, transferable, image, mediaType, dustSeed }));
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') ? 400 : 500;
-    res.status(status).json({ error: err.message });
+    sendError(res, err, status);
   }
 });
 
@@ -750,7 +761,7 @@ app.post('/api/nft/mint', async (req, res) => {
     }));
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
-    res.status(status).json({ error: err.message });
+    sendError(res, err, status);
   }
 });
 
@@ -836,7 +847,7 @@ app.post('/api/nft/mint-batch', async (req, res) => {
     res.json(await mintBatchNft({ ownerSeed, contractAddress, items, dustSeed }));
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
-    res.status(status).json({ error: err.message });
+    sendError(res, err, status);
   }
 });
 
@@ -846,7 +857,7 @@ app.post('/api/nft/approve', async (req, res) => {
     if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
     if (!toCoinPublicKey && !toShieldedAddress) return res.status(400).json({ error: 'Either toCoinPublicKey or toShieldedAddress is required' });
     res.json(await approveNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress, dustSeed }));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/nft/approve-for-all', async (req, res) => {
@@ -855,7 +866,7 @@ app.post('/api/nft/approve-for-all', async (req, res) => {
     if (!ownerSeed || !contractAddress || approved === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and approved are required' });
     if (!operatorCoinPublicKey && !operatorShieldedAddress) return res.status(400).json({ error: 'Either operatorCoinPublicKey or operatorShieldedAddress is required' });
     res.json(await setApprovalForAllNft({ ownerSeed, contractAddress, operatorCoinPublicKey, operatorShieldedAddress, approved: Boolean(approved), dustSeed }));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/nft/burn', async (req, res) => {
@@ -863,7 +874,7 @@ app.post('/api/nft/burn', async (req, res) => {
     const { ownerSeed, contractAddress, tokenId, dustSeed } = req.body;
     if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
     res.json(await burnNft({ ownerSeed, contractAddress, tokenId: String(tokenId), dustSeed }));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 // ---- Watch Routes ----
@@ -895,7 +906,7 @@ app.post('/api/watch/add', async (req, res) => {
     } else {
       return res.status(400).json({ error: 'Either address or seed is required' });
     }
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/watch/remove', async (req, res) => {
@@ -917,7 +928,7 @@ app.post('/api/watch/remove', async (req, res) => {
       return res.status(404).json({ error: 'Address not found in watch list' });
     }
     return res.status(400).json({ error: 'Either address or seed is required' });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.get('/api/watch/list', (_req, res) => {
@@ -926,7 +937,7 @@ app.get('/api/watch/list', (_req, res) => {
       fullWallets: walletManager.list(),
       addressWatches: addressWatcher.list(),
     });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/nft/transfer', async (req, res) => {
@@ -935,7 +946,7 @@ app.post('/api/nft/transfer', async (req, res) => {
     if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
     if (!toCoinPublicKey && !toShieldedAddress) return res.status(400).json({ error: 'Either toCoinPublicKey or toShieldedAddress is required' });
     res.json(await transferNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress, dustSeed }));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.get('/api/nft/query/:contractAddress', async (req, res) => {
@@ -944,14 +955,14 @@ app.get('/api/nft/query/:contractAddress', async (req, res) => {
     res.json(result);
   } catch (err: any) {
     if (err.message === 'Contract not found') return res.status(404).json({ error: 'Contract not found' });
-    res.status(500).json({ error: err.message });
+    sendError(res, err, 500);
   }
 });
 
 app.get('/api/version', async (_req, res) => {
   try {
     res.json(await getVersionInfo());
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 // Just delete cache files on disk. Does NOT touch running wallets.
@@ -964,7 +975,7 @@ app.post('/api/watch/clear-cache', async (_req, res) => {
       deletedFiles: result.deleted,
       message: `Cleared ${result.deleted} cache file(s). Running wallets keep working; next restart will full-sync.`,
     });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 // Delete cache files AND force every watched wallet to disconnect,
@@ -979,7 +990,7 @@ app.post('/api/watch/rebuild-cache', async (_req, res) => {
       failed: r.failed,
       message: `Re-syncing ${r.rebuilt} wallet(s) from the chain. Caches will be rewritten as they come back online.`,
     });
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.get('/api/health', (_req, res) => {
@@ -1007,7 +1018,7 @@ app.post('/api/sync-fast', async (req, res) => {
       fromIndex: Number(fromIndex) || 0,
       includeState: !!includeState,
     }));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 app.post('/api/sync-fast/dust', async (req, res) => {
@@ -1016,7 +1027,7 @@ app.post('/api/sync-fast/dust', async (req, res) => {
     const seedErr = validateSeed(seed, 'seed');
     if (seedErr) return res.status(400).json({ error: seedErr });
     res.json(await fastSyncDust(seed, { fromIndex: Number(fromIndex) || 0 }));
-  } catch (err: any) { res.status(500).json({ error: err.message }); }
+  } catch (err: any) { sendError(res, err, 500); }
 });
 
 // ---- Start ----
