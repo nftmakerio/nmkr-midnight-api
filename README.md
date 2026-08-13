@@ -78,6 +78,9 @@ The API is configured via environment variables — one instance per network.
 | `PRIVATE_STATE_PASSWORD` | `Midnight-NFT-Local-Dev-2026!` | Encryption password for the local LevelDB private state store |
 | `PORT` | `3000` | HTTP port the API binds to |
 | `API_DEBUG` | _(unset)_ | Set to `1` to attach the `debug` field (see below) to **every** response, not just errors |
+| `ACCESS_LOG` | _(unset)_ | Set to `1` to write **every** call to a daily text file (see below) — testing aid |
+| `ACCESS_LOG_DIR` | `<project>/logs` | Directory for the daily access log files |
+| `ACCESS_LOG_MASK` | _(unset)_ | Set to `1` to redact seeds/mnemonics in the access log (default: full/unmasked) |
 
 ## Debug output in responses
 
@@ -105,6 +108,23 @@ When it is attached:
 
 64-character hex seeds / secret keys are redacted from `logs`/`errors`. The
 `error` field itself is unchanged, so this is fully backwards-compatible.
+
+## Access log (testing)
+
+With `ACCESS_LOG=1`, **every** incoming call is appended to a daily text file
+`access-YYYY-MM-DD.log` (in `ACCESS_LOG_DIR`, default `./logs`). Each entry has
+the timestamp, caller IP, method/path/query, the **full request JSON**, and the
+response body + status + duration:
+
+```
+===== 2026-08-13T11:14:56.076Z | 203.0.113.5 | POST /api/wallet/info -> 200 (12ms) =====
+BODY   {"seed":"…"}
+RESULT {"seed":"…","unshieldedAddress":"…"}
+```
+
+> ⚠️ Request bodies contain **seeds / mnemonics in plain text**. This is a
+> testing aid — keep it **off** in production, or set `ACCESS_LOG_MASK=1` to
+> redact secrets. Log files are git-ignored.
 
 ## Prerequisites
 

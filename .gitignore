@@ -56,3 +56,7 @@ nft-mint-*/
 
 # Old scripts (not part of the API)
 setup.sh
+
+# Runtime access logs (testing)
+logs/
+access-*.log

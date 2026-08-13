@@ -40,6 +40,7 @@ import { ACTIVE_NETWORK, PUBLIC_API_URL, PORT, checkIndexerAndFallback, USING_CU
 import { initEventCache, eventCacheSubscriber, fastSyncShielded, fastSyncDust } from './event-cache/index.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
 import { installConsoleCapture, requestLogMiddleware, sendError } from './request-log.js';
+import { accessLogMiddleware, ACCESS_LOG_ENABLED } from './access-log.js';
 
 // Capture all console.* output per-request (incl. deep SDK errors) so it can
 // be returned in the response `debug` field. Must run before anything logs.
@@ -72,6 +73,13 @@ app.use((err: any, req: any, res: any, next: any) => {
   }
   next(err);
 });
+
+// ---- Access log (opt-in, testing) ----
+// Writes EVERY call (IP, method/path/query, full request JSON, result) to a
+// daily text file. Enabled via ACCESS_LOG=1. Registered BEFORE the debug
+// middleware so it captures the final response body (incl. `debug`).
+if (ACCESS_LOG_ENABLED) console.log('[AccessLog] ENABLED — writing every call to the daily log file (ACCESS_LOG_DIR)');
+app.use(accessLogMiddleware);
 
 // ---- Request-scoped log capture ----
 // Ties all console.* output during a request to that request and attaches it
