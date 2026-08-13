@@ -7,7 +7,9 @@
 //
 // TESTING AID: request bodies contain seeds / mnemonics in plain text, so
 // this is OPT-IN via env and off by default:
-//   ACCESS_LOG=1            enable
+//   ACCESS_LOG=1            enable — log every call
+//   ACCESS_LOG=2            enable, but skip the very high-frequency
+//                           /api/wallet/balance calls (too noisy)
 //   ACCESS_LOG_DIR=<path>   log directory (default: <project>/logs)
 //   ACCESS_LOG_MASK=1       redact seeds/mnemonics in the log (default: full)
 // =============================================================
@@ -19,7 +21,12 @@ import type { Request, Response, NextFunction } from 'express';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export const ACCESS_LOG_ENABLED = process.env.ACCESS_LOG === '1' || process.env.ACCESS_LOG === 'true';
+// ACCESS_LOG=1 logs every call; ACCESS_LOG=2 logs everything EXCEPT the very
+// high-frequency endpoints below; 'true' behaves like '1'.
+const ACCESS_LOG_MODE = process.env.ACCESS_LOG ?? '';
+export const ACCESS_LOG_ENABLED = ACCESS_LOG_MODE === '1' || ACCESS_LOG_MODE === '2' || ACCESS_LOG_MODE === 'true';
+// In level 2 these paths are skipped (prefix match, so GET /:address variants count too).
+const SKIP_PATHS = ACCESS_LOG_MODE === '2' ? ['/api/wallet/balance'] : [];
 const LOG_DIR = process.env.ACCESS_LOG_DIR || path.resolve(__dirname, '../../logs');
 const MASK = process.env.ACCESS_LOG_MASK === '1' || process.env.ACCESS_LOG_MASK === 'true';
 const MAX_BODY = 256 * 1024;   // cap each logged body to keep files sane
@@ -67,6 +74,8 @@ function fmt(v: any): string {
 
 export function accessLogMiddleware(req: Request, res: Response, next: NextFunction): void {
   if (!ACCESS_LOG_ENABLED) return next();
+  // Level 2 skips high-frequency endpoints (e.g. /api/wallet/balance).
+  if (SKIP_PATHS.some(p => req.path.startsWith(p))) return next();
 
   const start = Date.now();
   const startedAt = new Date().toISOString();

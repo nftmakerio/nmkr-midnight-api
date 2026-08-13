@@ -608,6 +608,10 @@ export async function deployAndMintNft(params: {
     return {
       contractAddress,
       tokenId: mintResult.private?.result?.toString() ?? '0',
+      txHash: (mintResult as any).public?.txHash,
+      txId: (mintResult as any).public?.txId,
+      blockHeight: (mintResult as any).public?.blockHeight,
+      deployTxHash: (deployed as any).deployTxData?.public?.txHash,
       owner: resolvedTo || coinPublicKey,
       uri: params.uri,
       name: params.name,
@@ -1035,6 +1039,9 @@ export async function createCollection(params: {
 
     return {
       contractAddress: deployed.deployTxData.public.contractAddress,
+      txHash: (deployed as any).deployTxData?.public?.txHash,
+      txId: (deployed as any).deployTxData?.public?.txId,
+      blockHeight: (deployed as any).deployTxData?.public?.blockHeight,
       ownerSeed: seed,
       ownerCoinPublicKey: coinPublicKey,
       unshieldedAddress: walletInfo.unshieldedAddress,
@@ -1145,6 +1152,9 @@ export async function mintNft(params: {
     return {
       contractAddress: params.contractAddress,
       tokenId: mintResult.private?.result?.toString() ?? '?',
+      txHash: (mintResult as any).public?.txHash,
+      txId: (mintResult as any).public?.txId,
+      blockHeight: (mintResult as any).public?.blockHeight,
       owner: resolvedTo || coinPublicKey,
       uri: params.uri,
       name: params.name,
