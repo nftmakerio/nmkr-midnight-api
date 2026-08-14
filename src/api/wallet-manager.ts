@@ -49,6 +49,7 @@ const HOUSEKEEPING_MS = 60 * 1000;             // run housekeeping every 60s
 const RECONNECT_DELAY_MS = 10_000;             // wait 10s before reconnect attempt
 const MAX_RECONNECT_RETRIES = 3;               // retry 3 times, then wait for housekeeping
 const MAX_WATCHED_WALLETS = 20;                // max watched wallets (all always online)
+const WAIT_FOR_SYNC_TIMEOUT_MS = 120_000;      // cap waitForSync so ops fail fast instead of hanging forever
 
 // ---- Types ----
 
@@ -387,7 +388,15 @@ class WalletManager {
         Rx.filter(syncCheck),
       );
     }
-    await Rx.firstValueFrom(pipeline);
+    // Safety net: never wait forever. If the (shielded/dust) feed lags and the
+    // sync predicate is never met, fail fast with a clear error instead of hanging.
+    try {
+      await Rx.firstValueFrom(pipeline.pipe(Rx.timeout(WAIT_FOR_SYNC_TIMEOUT_MS)));
+    } catch {
+      throw new Error(
+        `Wallet sync did not complete within ${WAIT_FOR_SYNC_TIMEOUT_MS / 1000}s — the shielded/dust indexer feed may be lagging. Please retry shortly.`,
+      );
+    }
   }
 
   // Get the seed for a watched address (internal use only — never expose via API)

@@ -567,7 +567,9 @@ export async function deployAndMintNft(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const { ctx, cached } = await getWalletCtx(params.seed);
+  // Owner only supplies its coinPublicKey (identity); fees come from dustSeed.
+  // Fast context is enough — avoids hanging on a full shielded sync.
+  const { ctx, cached } = await getWalletCtxFast(params.seed);
   const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.seed);
   try {
 
@@ -1008,7 +1010,9 @@ export async function createCollection(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const { ctx, cached } = await getWalletCtx(seed);
+  // Owner only supplies its coinPublicKey (identity); fees come from dustSeed.
+  // Fast context is enough — avoids hanging on a full shielded sync.
+  const { ctx, cached } = await getWalletCtxFast(seed);
   const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, seed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
@@ -1109,7 +1113,10 @@ export async function mintNft(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const { ctx, cached } = await getWalletCtx(params.ownerSeed);
+  // Owner only supplies its coinPublicKey (identity); fees come from dustSeed.
+  // Fast context (unshielded-ready) is enough — no full shielded sync needed,
+  // so this doesn't hang when the owner wallet isn't fully synced.
+  const { ctx, cached } = await getWalletCtxFast(params.ownerSeed);
   const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.ownerSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
@@ -1201,7 +1208,10 @@ export async function mintBatchNft(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const { ctx, cached } = await getWalletCtx(params.ownerSeed);
+  // Owner only supplies its coinPublicKey (identity); fees come from dustSeed.
+  // Fast context (unshielded-ready) is enough — no full shielded sync needed,
+  // so this doesn't hang when the owner wallet isn't fully synced.
+  const { ctx, cached } = await getWalletCtxFast(params.ownerSeed);
   const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.ownerSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
@@ -1305,7 +1315,10 @@ export async function transferNft(params: {
     CompiledContract.withCompiledFileAssets(path.join(CONTRACT_PATH, 'keys')),
   );
 
-  const { ctx, cached } = await getWalletCtx(params.ownerSeed);
+  // Owner only supplies its coinPublicKey (identity); fees come from dustSeed.
+  // Fast context (unshielded-ready) is enough — no full shielded sync needed,
+  // so this doesn't hang when the owner wallet isn't fully synced.
+  const { ctx, cached } = await getWalletCtxFast(params.ownerSeed);
   const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.ownerSeed);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
@@ -1888,8 +1901,16 @@ export async function burnNft(params: {
 // If a separate dustCtx is provided, its dust keys are used for fee payment instead of the
 // main wallet's keys. This lets one wallet own/authorize the contract while another pays fees.
 async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext) {
+  // We only need the owner's identity keys (coinPublicKey / encryptionPublicKey)
+  // here — those are available immediately. Do NOT wait for a full `isSynced`
+  // state: that hangs when the owner wallet isn't fully synced, and balancing
+  // uses the live facade state at tx time anyway. Bounded by a timeout so we
+  // never wait forever.
   const state: any = await Rx.firstValueFrom(
-    ctx.facade.state().pipe(Rx.filter((s: any) => s.isSynced)),
+    ctx.facade.state().pipe(
+      Rx.filter((s: any) => s?.shielded?.coinPublicKey),
+      Rx.timeout(60_000),
+    ),
   );
   // When a separate dustCtx is provided, we must use its facade for dust balancing
   // because the owner facade (ctx) doesn't have the dust payer's dust coins.
