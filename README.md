@@ -126,6 +126,35 @@ RESULT {"seed":"…","unshieldedAddress":"…"}
 > testing aid — keep it **off** in production, or set `ACCESS_LOG_MASK=1` to
 > redact secrets. Log files are git-ignored.
 
+## Large-ledger wallets (preprod): dust/shielded bootstrap
+
+On networks with a large ledger (preprod: ~1.5M dust events) the wallet SDK's
+own cold-sync does not scale — the dust wallet breaks on WS reconnect
+("non-linearly into dust commitment tree") and never converges (memory blows
+up / hangs), so mint & transfer fail before the wallet is usable.
+
+To work around this, prime the wallet-state cache once per owner seed with a
+robust, strict-order, constant-memory replay that produces a **facade-restorable**
+state. Afterwards the wallet `restore()`s from cache instead of cold-syncing.
+
+```bash
+# one-time per seed (long-running; streams the whole ledger once)
+curl -XPOST .../api/wallet/bootstrap-dust     -d '{"seed":"<hex>"}'   # ~25 min
+curl -XPOST .../api/wallet/bootstrap-shielded -d '{"seed":"<hex>"}'   # ~1-2 min
+```
+
+Notes:
+- These write `dust` / `shielded` into `wallet-state-cache-<network>/<seed16>.json`.
+  On next wallet start the log shows `Restoring … shielded=true … dust=true`.
+- **Do not** cache a stale `unshielded` state — leave that field empty so the
+  facade does a fresh, address-filtered unshielded sync (small); a stale
+  unshielded snapshot reports "synced" without the NIGHT UTXOs → "Insufficient
+  funds" on transfer.
+- Use an **authenticated indexer** (e.g. Blockfrost, `project_id`) — the public
+  indexer rejects the transaction-submit query with HTTP 403.
+- `ledger-v8` (8.1.x) is correct for preprod's current `event[v9]`; the
+  `ledger-v9` RCs target a future `v14` format and cannot parse preprod.
+
 ## Prerequisites
 
 - **Node.js** v22+
