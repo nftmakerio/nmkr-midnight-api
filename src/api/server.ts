@@ -41,6 +41,7 @@ import { initEventCache, eventCacheSubscriber, fastSyncShielded, fastSyncDust } 
 import { walletManager, addressWatcher } from './wallet-manager.js';
 import { installConsoleCapture, requestLogMiddleware, sendError } from './request-log.js';
 import { accessLogMiddleware, ACCESS_LOG_ENABLED } from './access-log.js';
+import { bootstrapDustCache } from './dust-bootstrap.js';
 
 // Capture all console.* output per-request (incl. deep SDK errors) so it can
 // be returned in the response `debug` field. Must run before anything logs.
@@ -669,6 +670,20 @@ app.post('/api/wallet/balance', async (req, res) => {
 
     // Not watched: full sync required (slow)
     res.json(await getBalanceBySeed(seedOrAddress));
+  } catch (err: any) { sendError(res, err, 500); }
+});
+
+// Bootstrap a facade-restorable DUST cache via a robust, strict-order replay
+// (bypasses the facade's fragile cold-sync that breaks on large ledgers like
+// preprod). LONG-RUNNING (minutes) — streams the whole dust ledger once and
+// writes wallet-state-cache-<net>/<seed16>.json. Afterwards a normal wallet
+// context restore()s the dust instead of cold-syncing. Seed required.
+app.post('/api/wallet/bootstrap-dust', async (req, res) => {
+  try {
+    const seed = req.body?.seed;
+    const seedErr = validateSeed(seed, 'seed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    res.json(await bootstrapDustCache(seed, (m) => console.log(`[DustBootstrap] ${m}`)));
   } catch (err: any) { sendError(res, err, 500); }
 });
 
