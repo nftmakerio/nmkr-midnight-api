@@ -410,15 +410,21 @@ class WalletManager {
     let nightBalance = 0n;
     let utxoCount = 0;
     let dustRaw = '0';
+    let dustCoins = 0;
+    let dustOk = true;
 
     try { nightBalance = m.lastState?.unshielded?.balances?.[unshieldedToken().raw] ?? 0n; } catch {}
     try { utxoCount = m.lastState?.unshielded?.availableCoins?.length ?? 0; } catch {}
+    // Dust reads go through the ledger WASM; a corrupted DustLocalState traps with
+    // `RuntimeError: unreachable`. Isolate BOTH reads so one broken wallet can't
+    // take down the whole /api/watch/list — the wallet is flagged with dustError instead.
     try {
       const cb = m.lastState?.dust?.capabilities?.coinsAndBalances;
       if (cb && typeof cb.getWalletBalance === 'function') {
         dustRaw = cb.getWalletBalance(m.lastState.dust.state, new Date()).toString();
       }
-    } catch {}
+    } catch { dustOk = false; }
+    try { dustCoins = m.lastState?.dust?.availableCoins?.length ?? 0; } catch { dustOk = false; }
     const dustNum = Number(dustRaw) / 1_000_000_000_000;
 
     // Sync progress
@@ -451,8 +457,9 @@ class WalletManager {
         nightFormatted: `${Number(nightBalance) / 1_000_000} NIGHT`,
         dustRaw,
         dustFormatted: `${dustNum.toFixed(4)} DUST`,
-        dustCoins: m.lastState?.dust?.availableCoins?.length ?? 0,
+        dustCoins,
         utxoCount,
+        ...(dustOk ? {} : { dustError: true }),
       },
       syncProgress: {
         // Overall percent: sum of all applied / sum of all highest (only when highest > 0)
