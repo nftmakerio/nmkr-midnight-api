@@ -42,6 +42,7 @@ import { walletManager, addressWatcher } from './wallet-manager.js';
 import { installConsoleCapture, requestLogMiddleware, sendError } from './request-log.js';
 import { accessLogMiddleware, ACCESS_LOG_ENABLED } from './access-log.js';
 import { bootstrapDustCache } from './dust-bootstrap.js';
+import { bootstrapShieldedCache } from './shielded-bootstrap.js';
 
 // Capture all console.* output per-request (incl. deep SDK errors) so it can
 // be returned in the response `debug` field. Must run before anything logs.
@@ -684,6 +685,18 @@ app.post('/api/wallet/bootstrap-dust', async (req, res) => {
     const seedErr = validateSeed(seed, 'seed');
     if (seedErr) return res.status(400).json({ error: seedErr });
     res.json(await bootstrapDustCache(seed, (m) => console.log(`[DustBootstrap] ${m}`)));
+  } catch (err: any) { sendError(res, err, 500); }
+});
+
+// Same robust bootstrap for the SHIELDED (zswap) sub-wallet. LONG-RUNNING.
+// Needed for a full mint on large ledgers (preprod) where the facade's zswap
+// cold-sync also does not scale. Writes the shielded field of the cache file.
+app.post('/api/wallet/bootstrap-shielded', async (req, res) => {
+  try {
+    const seed = req.body?.seed;
+    const seedErr = validateSeed(seed, 'seed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    res.json(await bootstrapShieldedCache(seed, (m) => console.log(`[ShieldedBootstrap] ${m}`)));
   } catch (err: any) { sendError(res, err, 500); }
 });
 
