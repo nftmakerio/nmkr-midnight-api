@@ -210,10 +210,7 @@ export async function getVersionInfo() {
       return stdout.trim();
     } catch { return null; }
   };
-  const compactc = await tryExec('compactc', ['--version']);
-  const zkir = await tryExec('zkir', ['--version']);
-
-  // Compiled contract version info
+  // Compiled contract version info (local file, fast)
   let contractInfo: any = null;
   try {
     const info = JSON.parse(fs.readFileSync(path.join(CONTRACT_PATH, 'compiler/contract-info.json'), 'utf-8'));
@@ -224,47 +221,37 @@ export async function getVersionInfo() {
     };
   } catch {}
 
-  // Proof server version
-  let proofServerVersion: string | null = null;
-  try {
-    const res = await fetch(`${cfg.proofServer}/version`, { signal: AbortSignal.timeout(5000) });
-    proofServerVersion = (await res.text()).trim();
-  } catch {}
+  // All live probes run CONCURRENTLY with a short timeout, so /api/version stays
+  // fast even when an endpoint is unreachable (was ~40s: several 5s probes in series).
+  const PROBE_MS = 2000;
+  const nodeHttpUrl = cfg.nodeRpc.replace(/^wss?:/, 'https:');
+  const jsonRpc = (method: string) =>
+    fetch(nodeHttpUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params: [] }),
+      signal: AbortSignal.timeout(PROBE_MS),
+    }).then(r => r.json());
 
-  // Midnight Node version + chain
-  let nodeRpcVersion: string | null = null;
-  let nodeRpcChain: string | null = null;
-  try {
-    const httpUrl = cfg.nodeRpc.replace(/^wss?:/, 'https:');
-    const [verRes, chainRes] = await Promise.all([
-      fetch(httpUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'system_version', params: [] }),
-        signal: AbortSignal.timeout(5000),
-      }).then(r => r.json()),
-      fetch(httpUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'system_chain', params: [] }),
-        signal: AbortSignal.timeout(5000),
-      }).then(r => r.json()),
-    ]);
-    nodeRpcVersion = verRes.result || null;
-    nodeRpcChain = chainRes.result || null;
-  } catch {}
-
-  // Indexer reachability (it doesn't expose a version via GraphQL)
-  let indexerReachable = false;
-  try {
-    const res = await fetch(cfg.indexerHttp, {
+  const [compactc, zkir, proofServerVersion, nodeRpcVersion, nodeRpcChain, indexerReachable] = await Promise.all([
+    tryExec('compactc', ['--version']),
+    tryExec('zkir', ['--version']),
+    fetch(`${cfg.proofServer}/version`, { signal: AbortSignal.timeout(PROBE_MS) }).then(r => r.text()).then(t => t.trim()).catch(() => null),
+    jsonRpc('system_version').then(r => r.result || null).catch(() => null),
+    jsonRpc('system_chain').then(r => r.result || null).catch(() => null),
+    fetch(cfg.indexerHttp, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query: '{ __typename }' }),
-      signal: AbortSignal.timeout(5000),
-    });
-    indexerReachable = res.ok;
-  } catch {}
+      signal: AbortSignal.timeout(PROBE_MS),
+    }).then(r => r.ok).catch(() => false),
+  ]);
+
+  // Never expose secrets (Blockfrost project_id / API keys) in returned URLs — strip the query string.
+  const redactUrl = (u: string): string => {
+    try { const url = new URL(u); return url.origin + url.pathname; }
+    catch { return String(u).replace(/[?&](project_id|api_key|apiKey|key|token)=[^&]+/gi, ''); }
+  };
 
   return {
     api: {
@@ -273,12 +260,12 @@ export async function getVersionInfo() {
     },
     network: {
       name: cfg.networkId,
-      nodeRpc: cfg.nodeRpc,
+      nodeRpc: redactUrl(cfg.nodeRpc),
       nodeRpcVersion,
       nodeRpcChain,
-      indexer: cfg.indexerHttp,
+      indexer: redactUrl(cfg.indexerHttp),
       indexerReachable,
-      proofServer: cfg.proofServer,
+      proofServer: redactUrl(cfg.proofServer),
       proofServerVersion,
     },
     tooling: {
