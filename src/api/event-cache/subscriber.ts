@@ -71,6 +71,7 @@ export class EventCacheSubscriber {
   private flushing = false;
   private readonly FLUSH_INTERVAL_MS = 500;
   private readonly FLUSH_BATCH_SIZE = 500;
+  private readonly MAX_QUEUE = 25_000;   // backpressure cap — bounds memory when the indexer WS flaps
 
   /** Start both subscriptions. Never throws — failures cause reconnect. */
   async start(): Promise<void> {
@@ -194,6 +195,15 @@ export class EventCacheSubscriber {
         if (stream === 'zswap') this.queueZswap.push(queued);
         else                    this.queueDust.push(queued);
         this.progress[stream].highest = Math.max(this.progress[stream].highest, data.maxId || data.id);
+        // Backpressure: if the DB flush can't keep up (e.g. the indexer WS is
+        // flapping and re-streaming a large backlog), the queue can grow without
+        // bound and OOM the process. Cap it — close the socket to pause reading;
+        // the flusher drains, and reconnect resumes from the last flushed id.
+        const qlen = stream === 'zswap' ? this.queueZswap.length : this.queueDust.length;
+        if (qlen >= this.MAX_QUEUE) {
+          console.warn(`[EventCache/${stream}] queue at ${qlen} >= ${this.MAX_QUEUE} — applying backpressure (closing socket to drain)`);
+          try { ws.close(); } catch {}
+        }
         return;
       }
 
