@@ -49,7 +49,12 @@ const HOUSEKEEPING_MS = 60 * 1000;             // run housekeeping every 60s
 const RECONNECT_DELAY_MS = 10_000;             // wait 10s before reconnect attempt
 const MAX_RECONNECT_RETRIES = 3;               // retry 3 times, then wait for housekeeping
 const MAX_WATCHED_WALLETS = 20;                // max watched wallets (all always online)
-const WAIT_FOR_SYNC_TIMEOUT_MS = 120_000;      // cap waitForSync so ops fail fast instead of hanging forever
+// Cap waitForSync so ops fail fast instead of hanging forever. Override via
+// WALLET_SYNC_TIMEOUT_MS — raise it when a wallet must catch up a larger delta
+// (e.g. restore-from-cache + several days of new events, which converges but
+// can take >120s). A fresh full cold-sync of a huge ledger does NOT converge
+// by waiting longer — prime the cache via /api/wallet/bootstrap-dust instead.
+const WAIT_FOR_SYNC_TIMEOUT_MS = Number(process.env.WALLET_SYNC_TIMEOUT_MS) || 120_000;
 
 // ---- Types ----
 
