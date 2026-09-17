@@ -13,6 +13,7 @@
 // =============================================================
 
 import { WebSocket } from 'ws';
+import { spawn } from 'node:child_process';
 import * as ledger from '@midnight-ntwrk/ledger-v8';
 import { unshieldedToken } from '@midnight-ntwrk/ledger-v8';
 import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
@@ -72,7 +73,7 @@ export interface WalletContext {
   unshieldedKeystore: UnshieldedKeystore;
 }
 
-type WalletStatus = 'active' | 'suspended' | 'reconnecting';
+type WalletStatus = 'active' | 'suspended' | 'reconnecting' | 'bootstrapping';
 
 interface SerializedWalletState {
   shielded: string;
@@ -163,6 +164,7 @@ class WalletManager {
   private wallets = new Map<string, ManagedWallet>();          // key = seed
   private addressIndex = new Map<string, string>();            // address -> seed (lookup index)
   private subscriptions = new Map<string, Rx.Subscription>();
+  private bootstrapping = new Set<string>();                  // seeds whose dust cache is being built out-of-process
   private housekeepingInterval: ReturnType<typeof setInterval> | null = null;
 
   async initialize() {
@@ -525,17 +527,39 @@ class WalletManager {
     // Fast-sync from MySQL is exposed via /api/sync-fast endpoints for read
     // operations only.
 
+    // No cache → do NOT cold-sync. The facade would accumulate the entire dust
+    // ledger (~1.5M events) in RAM and OOM the process. Instead build the dust
+    // cache OUT-OF-PROCESS (memory-safe batched apply) and register the wallet
+    // as 'bootstrapping'; housekeep() activates it once the cache is written.
+    if (!cachedState) {
+      this.spawnDustBootstrap(info.seed);
+      const managed: ManagedWallet = {
+        info, ctx: null, status: 'bootstrapping', synced: false, lastState: null,
+        serializedState: null, reconnectAttempts: 0, addresses,
+      };
+      this.wallets.set(info.seed, managed);
+      this.indexAddresses(managed);
+      return managed;
+    }
+
     let ctx: WalletContext;
     try {
       ctx = await this.createWalletContext(info.seed, cachedState);
     } catch {
-      // Cache might be stale — retry without cache
-      console.warn(`[WalletManager] Cached connect failed for ${info.seed.substring(0, 12)}..., trying full sync`);
+      // Cache stale/corrupt → drop it and re-bootstrap (never cold-sync).
+      console.warn(`[WalletManager] Cached connect failed for ${info.seed.substring(0, 12)}..., re-bootstrapping dust cache`);
       try {
         const cacheFile = path.join(STATE_CACHE_DIR, `${info.seed.substring(0, 16)}.json`);
         if (fs.existsSync(cacheFile)) fs.unlinkSync(cacheFile);
       } catch {}
-      ctx = await this.createWalletContext(info.seed, null);
+      this.spawnDustBootstrap(info.seed);
+      const managed: ManagedWallet = {
+        info, ctx: null, status: 'bootstrapping', synced: false, lastState: null,
+        serializedState: null, reconnectAttempts: 0, addresses,
+      };
+      this.wallets.set(info.seed, managed);
+      this.indexAddresses(managed);
+      return managed;
     }
 
     const managed: ManagedWallet = {
@@ -718,10 +742,65 @@ class WalletManager {
         } catch {}
       }
     }
+
+    // 3. Activate wallets whose out-of-process dust bootstrap has finished
+    //    (cache file now exists → fast restore instead of cold-sync).
+    for (const [seed, managed] of this.wallets) {
+      if (managed.status !== 'bootstrapping' || managed.ctx) continue;
+      const cacheFile = path.join(STATE_CACHE_DIR, `${seed.substring(0, 16)}.json`);
+      if (fs.existsSync(cacheFile)) {
+        this.bootstrapping.delete(seed);
+        try {
+          const ctx = await this.createWalletContext(seed, this.loadCachedState(seed));
+          managed.ctx = ctx;
+          managed.status = 'active';
+          managed.synced = false;
+          this.subscribe(managed);
+          console.log(`[WalletManager] ${managed.info.label || seed.substring(0, 12)}... dust bootstrap complete → active`);
+        } catch (e: any) {
+          console.warn(`[WalletManager] activation after bootstrap failed for ${seed.substring(0, 12)}...: ${e?.message}`);
+        }
+      } else if (!this.bootstrapping.has(seed)) {
+        // Process restarted mid-bootstrap and cache not yet written → re-kick.
+        this.spawnDustBootstrap(seed);
+      }
+    }
   }
 
   private activeCount() { return [...this.wallets.values()].filter(m => m.status === 'active').length; }
   private suspendedCount() { return [...this.wallets.values()].filter(m => m.status === 'suspended').length; }
+
+  // Build a wallet's dust cache OUT-OF-PROCESS (memory-safe 5k-batched apply),
+  // so the main event loop never blocks and the facade never cold-syncs the full
+  // dust ledger into RAM (which OOMs). The wallet is activated by housekeep()
+  // once the cache file is written. Idempotent per seed within a process lifetime.
+  private spawnDustBootstrap(seed: string): void {
+    if (this.bootstrapping.has(seed)) return;
+    const cacheFile = path.join(STATE_CACHE_DIR, `${seed.substring(0, 16)}.json`);
+    if (fs.existsSync(cacheFile)) return;   // already have it
+    this.bootstrapping.add(seed);
+    try {
+      const tsxCli = path.resolve(__dirname, '../../node_modules/tsx/dist/cli.mjs');
+      const runner = path.resolve(__dirname, 'bootstrap-runner.ts');
+      const cfgIdx = process.argv.indexOf('--config');
+      const cfgPath = cfgIdx >= 0 ? process.argv[cfgIdx + 1]
+        : (process.env.MIDNIGHT_CONFIG || `config.${ACTIVE_NETWORK.networkId}.json`);
+      fs.mkdirSync(STATE_CACHE_DIR, { recursive: true });
+      const logFd = fs.openSync(path.join(STATE_CACHE_DIR, `bootstrap-${seed.substring(0, 16)}.log`), 'a');
+      const child = spawn(process.execPath, [tsxCli, runner, '--config', cfgPath, '--seed', seed], {
+        detached: true, stdio: ['ignore', logFd, logFd], windowsHide: true,
+      });
+      child.on('error', (e: any) => {
+        this.bootstrapping.delete(seed);
+        console.warn(`[WalletManager] dust bootstrap spawn error for ${seed.substring(0, 12)}...: ${e?.message}`);
+      });
+      child.unref();
+      console.log(`[WalletManager] dust bootstrap started (out-of-process) for ${seed.substring(0, 12)}... — wallet stays 'bootstrapping', activates when cache ready (~1-2h, one-time)`);
+    } catch (e: any) {
+      this.bootstrapping.delete(seed);
+      console.warn(`[WalletManager] failed to start dust bootstrap for ${seed.substring(0, 12)}...: ${e?.message}`);
+    }
+  }
 
   // ---- Wallet creation ----
 
