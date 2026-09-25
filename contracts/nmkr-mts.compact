@@ -1,0 +1,75 @@
+pragma language_version >= 0.23;
+import CompactStandardLibrary;
+
+export { ZswapCoinPublicKey, ContractAddress };
+
+// NMKR Midnight NFT — "MTS" format: one contract = one collection, many native
+// shielded tokens (pieces). Rendered by 1AM-style wallets: the wallet enumerates
+// its native tokens and resolves metadata from this contract's ledger by the token
+// COLOUR. Metadata struct byte-layout matches the reference decoder exactly:
+//   b32(name) b1 b10(symbol) b1 b1 b1 b256(description) b1 b256(image) b1 b32(mediaType) b2
+struct TokenMetadata {
+  name: Bytes<32>,
+  f1: Boolean,
+  symbol: Bytes<10>,
+  f2: Boolean,
+  f3: Boolean,
+  f4: Boolean,
+  description: Bytes<256>,
+  f5: Boolean,
+  image: Bytes<256>,
+  f6: Boolean,
+  mediaType: Bytes<32>,
+  f7: Uint<16>,
+}
+
+export sealed ledger collectionName: Opaque<"string">;
+export ledger metadata: Map<Bytes<32>, TokenMetadata>;
+export ledger supply: Map<Bytes<32>, Uint<64>>;
+export ledger contractOwner: ZswapCoinPublicKey;
+export ledger mintedCount: Counter;
+
+constructor(_name: Opaque<"string">, _owner: ZswapCoinPublicKey) {
+  collectionName = disclose(_name);
+  contractOwner = disclose(_owner);
+}
+
+export circuit name(): Opaque<"string"> { return collectionName; }
+export circuit totalSupply(): Uint<64> { return mintedCount.read(); }
+
+// Mints a native shielded token (colour = tokenType(tokenId, this contract)),
+// sends it to `recipient`, records metadata + supply keyed by the COLOUR (so a
+// wallet can map a held token -> its metadata). Owner only. Returns the colour.
+export circuit mint(
+  tokenId: Bytes<32>,
+  recipient: ZswapCoinPublicKey,
+  nonce: Bytes<32>,
+  nftName: Bytes<32>,
+  symbol: Bytes<10>,
+  description: Bytes<256>,
+  image: Bytes<256>,
+  mediaType: Bytes<32>
+): Bytes<32> {
+  assert(ownPublicKey() == contractOwner, "Only the contract owner can mint");
+  const d_id = disclose(tokenId);
+  const colour = tokenType(d_id, kernel.self());
+  metadata.insert(colour, TokenMetadata {
+    name: disclose(nftName),
+    f1: true,
+    symbol: disclose(symbol),
+    f2: false,
+    f3: false,
+    f4: true,
+    description: disclose(description),
+    f5: true,
+    image: disclose(image),
+    f6: true,
+    mediaType: disclose(mediaType),
+    f7: 1 as Uint<16>
+  });
+  supply.insert(colour, 1 as Uint<64>);
+  mintShieldedToken(d_id, 1 as Uint<64>, disclose(nonce),
+    left<ZswapCoinPublicKey, ContractAddress>(disclose(recipient)));
+  mintedCount.increment(1);
+  return colour;
+}

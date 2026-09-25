@@ -1,0 +1,254 @@
+{
+  "compiler-version": "0.31.0",
+  "language-version": "0.23.0",
+  "runtime-version": "0.16.0",
+  "circuits": [
+    {
+      "name": "name",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Opaque",
+        "tsType": "string"
+      }
+    },
+    {
+      "name": "totalSupply",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+      ],
+      "result-type": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "mint",
+      "pure": false,
+      "proof": true,
+      "arguments": [
+        {
+          "name": "tokenId",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "recipient",
+          "type": {
+            "type-name": "Struct",
+            "name": "ZswapCoinPublicKey",
+            "elements": [
+              {
+                "name": "bytes",
+                "type": {
+                  "type-name": "Bytes",
+                  "length": 32
+                }
+              }
+            ]
+          }
+        },
+        {
+          "name": "nonce",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "nftName",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        },
+        {
+          "name": "symbol",
+          "type": {
+            "type-name": "Bytes",
+            "length": 10
+          }
+        },
+        {
+          "name": "description",
+          "type": {
+            "type-name": "Bytes",
+            "length": 256
+          }
+        },
+        {
+          "name": "image",
+          "type": {
+            "type-name": "Bytes",
+            "length": 256
+          }
+        },
+        {
+          "name": "mediaType",
+          "type": {
+            "type-name": "Bytes",
+            "length": 32
+          }
+        }
+      ],
+      "result-type": {
+        "type-name": "Bytes",
+        "length": 32
+      }
+    }
+  ],
+  "witnesses": [
+  ],
+  "contracts": [
+  ],
+  "ledger": [
+    {
+      "name": "collectionName",
+      "index": 0,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Opaque",
+        "tsType": "string"
+      }
+    },
+    {
+      "name": "metadata",
+      "index": 1,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Struct",
+        "name": "TokenMetadata",
+        "elements": [
+          {
+            "name": "name",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "f1",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "symbol",
+            "type": {
+              "type-name": "Bytes",
+              "length": 10
+            }
+          },
+          {
+            "name": "f2",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "f3",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "f4",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "description",
+            "type": {
+              "type-name": "Bytes",
+              "length": 256
+            }
+          },
+          {
+            "name": "f5",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "image",
+            "type": {
+              "type-name": "Bytes",
+              "length": 256
+            }
+          },
+          {
+            "name": "f6",
+            "type": {
+              "type-name": "Boolean"
+            }
+          },
+          {
+            "name": "mediaType",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          },
+          {
+            "name": "f7",
+            "type": {
+              "type-name": "Uint",
+              "maxval": 65535
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "supply",
+      "index": 2,
+      "exported": true,
+      "storage": "Map",
+      "key": {
+        "type-name": "Bytes",
+        "length": 32
+      },
+      "value": {
+        "type-name": "Uint",
+        "maxval": 18446744073709551615
+      }
+    },
+    {
+      "name": "contractOwner",
+      "index": 3,
+      "exported": true,
+      "storage": "Cell",
+      "type": {
+        "type-name": "Struct",
+        "name": "ZswapCoinPublicKey",
+        "elements": [
+          {
+            "name": "bytes",
+            "type": {
+              "type-name": "Bytes",
+              "length": 32
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "mintedCount",
+      "index": 4,
+      "exported": true,
+      "storage": "Counter"
+    }
+  ]
+}

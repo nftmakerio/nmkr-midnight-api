@@ -31,6 +31,9 @@ import {
   buildUnsealedMintTx,
   buildUnsealedNightTransfer,
   mintNft,
+  deployAndMintMts,
+  deployMtsCollection,
+  transferMtsNft,
   transferNft,
   approveNft,
   setApprovalForAllNft,
@@ -452,8 +455,10 @@ swaggerSpec.paths = {
         contractAddress: { type: 'string', description: 'Contract address of the collection. If empty, a new collection is created.' },
         uri: { type: 'string', description: 'Metadata URI (max 128 chars)', example: 'ipfs://example/token-1.json' },
         name: { type: 'string', description: 'NFT name (required, max 64 chars)', example: 'My First NFT' },
-        image: { type: 'string', description: 'Optional per-token image URI (max 128 chars)', example: 'ipfs://example/image.png' },
+        image: { type: 'string', description: 'Optional per-token image URI (max 128 chars). For native mints: ipfs://<hash>', example: 'ipfs://example/image.png' },
         mediaType: { type: 'string', description: 'Optional MIME type (max 64 chars)', example: 'image/png' },
+        native: { type: 'boolean', default: false, description: 'true = MTS-format mint: mints a real NATIVE shielded token per NFT with on-chain metadata, rendered by 1AM-style wallets. Deploys its own collection and sends the token to toShieldedAddress. `uri` not needed; requires `toShieldedAddress`.' },
+        description: { type: 'string', description: 'Only for native mints: on-chain description (max ~200 chars)' },
         toCoinPublicKey: { type: 'string', description: 'Optional: recipient CoinPublicKey (hex)' },
         toShieldedAddress: { type: 'string', description: 'Optional: shielded address (mn_shield-addr_...) — resolved automatically' },
         collection: { type: 'string', description: 'Only for new collection: name (max 64 chars)', example: 'MidnightNFT' },
@@ -770,7 +775,9 @@ app.post('/api/nft/create-collection', async (req, res) => {
     if (seedErr) return res.status(400).json({ error: seedErr });
     if (dustSeed) { const dErr = validateSeed(dustSeed, 'dustSeed'); if (dErr) return res.status(400).json({ error: dErr }); }
     if (!collection || !symbol) return res.status(400).json({ error: 'collection and symbol are required' });
-    res.json(await createCollection({ seed, collection, symbol, transferable, image, mediaType, dustSeed }));
+    // Deploys an MTS collection contract (native-token NFTs rendered by 1AM-style wallets).
+    // Returns contractAddress + ownerSeed for subsequent /api/nft/mint calls.
+    res.json(await deployMtsCollection({ seed, collection, symbol, dustSeed }));
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') ? 400 : 500;
     sendError(res, err, status);
@@ -780,20 +787,24 @@ app.post('/api/nft/create-collection', async (req, res) => {
 app.post('/api/nft/mint', async (req, res) => {
   try {
     const {
-      ownerSeed, contractAddress, uri, name, image, mediaType,
-      toCoinPublicKey, toShieldedAddress,
-      collection, symbol, transferable, collectionImage, collectionMediaType,
-      dustSeed,
+      ownerSeed, contractAddress, name, image, mediaType,
+      toShieldedAddress, collection, symbol, description, dustSeed,
     } = req.body;
     const seedErr = validateSeed(ownerSeed, 'ownerSeed');
     if (seedErr) return res.status(400).json({ error: seedErr });
     if (dustSeed) { const dErr = validateSeed(dustSeed, 'dustSeed'); if (dErr) return res.status(400).json({ error: dErr }); }
-    if (!uri || !name) return res.status(400).json({ error: 'uri and name are required' });
-    res.json(await mintNft({
-      ownerSeed, contractAddress, uri, name, image, mediaType,
-      toCoinPublicKey, toShieldedAddress,
-      collection, symbol, transferable, collectionImage, collectionMediaType,
-      dustSeed,
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    // Mints a native shielded token per NFT with on-chain metadata (name/symbol/
+    // description/image), rendered by 1AM-style wallets. Without contractAddress a new
+    // collection is deployed (returns contractAddress + ownerSeed); with it, the NFT is
+    // minted into that existing collection. Recipient = toShieldedAddress (a
+    // mn_shield-addr_...; its encryption key is needed). No recipient => mint to owner.
+    res.json(await deployAndMintMts({
+      seed: ownerSeed, dustSeed,
+      collection, name, symbol, description, image, mediaType,
+      toShieldedAddress,
+      contractAddress,  // if given -> mint into this existing collection
     }));
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
@@ -978,11 +989,38 @@ app.get('/api/watch/list', (_req, res) => {
 
 app.post('/api/nft/transfer', async (req, res) => {
   try {
-    const { ownerSeed, contractAddress, tokenId, toCoinPublicKey, toShieldedAddress, dustSeed } = req.body;
-    if (!ownerSeed || !contractAddress || tokenId === undefined) return res.status(400).json({ error: 'ownerSeed, contractAddress and tokenId are required' });
-    if (!toCoinPublicKey && !toShieldedAddress) return res.status(400).json({ error: 'Either toCoinPublicKey or toShieldedAddress is required' });
-    res.json(await transferNft({ ownerSeed, contractAddress, tokenId: String(tokenId), toCoinPublicKey, toShieldedAddress, dustSeed }));
-  } catch (err: any) { sendError(res, err, 500); }
+    // Native (MTS) transfer: send the NFT (a native shielded token) to another wallet.
+    // tokenId is the 64-hex token colour returned by /api/nft/mint; toShieldedAddress
+    // is the recipient. contractAddress is not needed (tokens move at the wallet level).
+    const { ownerSeed, tokenId, tokenType, toShieldedAddress, amount, dustSeed } = req.body;
+    const seedErr = validateSeed(ownerSeed, 'ownerSeed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    if (dustSeed) { const dErr = validateSeed(dustSeed, 'dustSeed'); if (dErr) return res.status(400).json({ error: dErr }); }
+    const colour = (tokenType || tokenId || '').toString();
+    if (!/^[0-9a-fA-F]{64}$/.test(colour)) return res.status(400).json({ error: 'tokenId (the 64-hex token colour from mint) is required' });
+    if (!toShieldedAddress) return res.status(400).json({ error: 'toShieldedAddress is required' });
+    res.json(await transferMtsNft({ senderSeed: ownerSeed, tokenType: colour, toShieldedAddress, amount, dustSeed }));
+  } catch (err: any) {
+    const status = err.message?.includes('required') || err.message?.includes('must be') ? 400 : 500;
+    sendError(res, err, status);
+  }
+});
+
+// Send a NATIVE (MTS) NFT: the holder transfers the native shielded token to
+// another wallet. tokenType = the 64-char hex token colour the wallet holds.
+app.post('/api/nft/send-native', async (req, res) => {
+  try {
+    const { ownerSeed, tokenType, toShieldedAddress, amount, dustSeed } = req.body;
+    const seedErr = validateSeed(ownerSeed, 'ownerSeed');
+    if (seedErr) return res.status(400).json({ error: seedErr });
+    if (dustSeed) { const dErr = validateSeed(dustSeed, 'dustSeed'); if (dErr) return res.status(400).json({ error: dErr }); }
+    if (!tokenType || !/^[0-9a-fA-F]{64}$/.test(tokenType)) return res.status(400).json({ error: 'tokenType (64-char hex token colour) is required' });
+    if (!toShieldedAddress) return res.status(400).json({ error: 'toShieldedAddress is required' });
+    res.json(await transferMtsNft({ senderSeed: ownerSeed, tokenType, toShieldedAddress, amount, dustSeed }));
+  } catch (err: any) {
+    const status = err.message?.includes('required') || err.message?.includes('must be') ? 400 : 500;
+    sendError(res, err, status);
+  }
 });
 
 app.get('/api/nft/query/:contractAddress', async (req, res) => {

@@ -21,7 +21,7 @@ import {
   MidnightBech32m, UnshieldedAddress,
 } from '@midnight-ntwrk/wallet-sdk-address-format';
 import { setNetworkId, getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
-import { deployContract } from '@midnight-ntwrk/midnight-js-contracts';
+import { deployContract, createCallTxOptions, submitCallTx, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
@@ -1959,4 +1959,286 @@ async function resolveDustCtx(dustSeed?: string, ownerSeed?: string): Promise<{ 
     return { dustCtx: ctx, dustCached: cached };
   }
   return { dustCtx: undefined, dustCached: true };
+}
+
+// ===================================================================
+// MTS-format prototype (native shielded token + on-chain metadata map)
+// Additive & isolated: deploys the nmkr-mts contract and mints one
+// native-token NFT. Does NOT touch the existing nmkr-nft flow.
+// ===================================================================
+export async function deployAndMintMts(params: {
+  seed: string;
+  dustSeed?: string;
+  collection?: string;
+  name?: string;
+  symbol?: string;
+  description?: string;
+  image?: string;
+  mediaType?: string;
+  toCoinPublicKey?: string;
+  toShieldedAddress?: string;
+  contractAddress?: string;   // if set -> mint into this existing MTS collection
+}) {
+  const cfg = activeNetwork();
+  const MTS_PATH = path.join(path.dirname(CONTRACT_PATH), 'nmkr-mts');
+  const resolvedTo = resolveToCoinPublicKey(params.toCoinPublicKey, params.toShieldedAddress);
+  const collectionName = params.collection || 'NMKR MTS Test';
+  const nftName = params.name || 'MTS Test NFT';
+  const symbol = params.symbol || 'MTS';
+  const description = params.description || '';
+  const image = params.image || '';
+  const mediaType = params.mediaType || '';
+
+  const contractModule = await import(pathToFileURL(path.join(MTS_PATH, 'contract', 'index.js')).href);
+  const compiledContract = CompiledContract.make('nmkr-mts', contractModule.Contract).pipe(
+    CompiledContract.withVacantWitnesses,
+    CompiledContract.withCompiledFileAssets(path.join(MTS_PATH, 'keys')),
+  );
+
+  const { ctx, cached } = await getWalletCtxFast(params.seed);
+  const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.seed);
+  try {
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
+    const coinPublicKey = state.shielded.coinPublicKey.toHexString();
+    const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
+    const mintTo = resolvedTo ? { bytes: Buffer.from(resolvedTo, 'hex') } : ownerPubKey;
+
+    // Native shielded token minting to an EXTERNAL recipient needs that recipient's
+    // encryption public key. Extract it from the target shielded address and pass it
+    // via additionalCoinEncPublicKeyMappings. Self-mint needs no mapping (the resolver
+    // knows the wallet's own key).
+    let encMappings: Map<string, string> | undefined = undefined;
+    if (params.toShieldedAddress) {
+      const r = resolveShieldedAddress(params.toShieldedAddress);
+      encMappings = new Map([[r.coinPublicKey, r.encryptionPublicKey]]);
+    }
+
+    const bridge = await createProviderBridge(ctx, dustCtx);
+    const zkConfigProvider = new NodeZkConfigProvider(MTS_PATH);
+    const providers = {
+      privateStateProvider: levelPrivateStateProvider({
+        privateStateStoreName: `mts-state-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
+        privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
+        accountId: coinPublicKey.substring(0, 32),
+      }),
+      publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
+      zkConfigProvider,
+      proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
+      walletProvider: bridge,
+      midnightProvider: bridge,
+    };
+
+    // Deploy a NEW collection, or mint into an EXISTING one (contractAddress given).
+    let contractAddress: string;
+    let deployTxHash: string | undefined = undefined;
+    const newCollection = !params.contractAddress;
+    if (params.contractAddress) {
+      await findDeployedContract(providers as any, {
+        compiledContract,
+        contractAddress: params.contractAddress,
+        privateStateId: 'mtsPrivateState',
+        initialPrivateState: {},
+      } as any);
+      contractAddress = params.contractAddress;
+    } else {
+      const deployed = await deployContract(providers, {
+        compiledContract,
+        privateStateId: 'mtsPrivateState',
+        initialPrivateState: {},
+        args: [collectionName, ownerPubKey],
+      });
+      contractAddress = deployed.deployTxData.public.contractAddress;
+      deployTxHash = (deployed as any).deployTxData?.public?.txHash;
+    }
+
+    const nodeCrypto = await import('node:crypto');
+    const tokenId = new Uint8Array(nodeCrypto.randomBytes(32));
+    const nonce = new Uint8Array(nodeCrypto.randomBytes(32));
+
+    // Metadata struct uses fixed Bytes<N> fields (to match the 1AM/MTS reference
+    // byte alignment). Pad/truncate each string to its exact byte width.
+    const padBytes = (s: string, n: number): Uint8Array => {
+      const b = new Uint8Array(n);
+      const src = Buffer.from(s, 'utf8');
+      b.set(src.subarray(0, n));
+      return b;
+    };
+    const nameB = padBytes(nftName, 32);
+    const symbolB = padBytes(symbol, 10);
+    const descB = padBytes(description, 256);
+    const imageB = padBytes(image, 256);
+    const mediaB = padBytes(mediaType, 32);
+
+    // Use the low-level call path so we can pass additionalCoinEncPublicKeyMappings
+    // (the deployed.callTx.* convenience hardcodes it to undefined).
+    const mintResult = await withRetry(ctx, () => {
+      const callOptions = createCallTxOptions(
+        compiledContract,
+        'mint' as any,
+        contractAddress,
+        'mtsPrivateState',
+        encMappings as any,
+        [tokenId, mintTo, nonce, nameB, symbolB, descB, imageB, mediaB] as any,
+      );
+      return submitCallTx(providers as any, callOptions as any);
+    });
+
+    // The mint circuit returns the token COLOUR (32 bytes) — the token's identity,
+    // used to transfer it later. Fall back to the domain if unavailable.
+    const colourBytes = (mintResult as any).private?.result;
+    const colour = colourBytes ? Buffer.from(colourBytes).toString('hex') : Buffer.from(tokenId).toString('hex');
+
+    // For an existing-collection mint, report the REAL on-chain collection name
+    // (the caller may not pass `collection`); read it via the MTS ledger parser.
+    let collectionOut = collectionName;
+    if (params.contractAddress) {
+      try {
+        const cs = await providers.publicDataProvider.queryContractState(params.contractAddress);
+        if (cs) collectionOut = (contractModule.ledger(cs.data).collectionName as string) || collectionName;
+      } catch { /* keep passed/default name */ }
+    }
+
+    return {
+      contractAddress,
+      tokenId: colour,          // MTS token identity = the token colour (use for transfer)
+      tokenType: colour,        // explicit alias
+      domain: Buffer.from(tokenId).toString('hex'),
+      nonce: Buffer.from(nonce).toString('hex'),
+      txHash: (mintResult as any).public?.txHash,
+      deployTxHash,
+      newCollection,
+      owner: resolvedTo || coinPublicKey,
+      ownerSeed: newCollection ? params.seed : undefined,
+      collection: collectionOut, name: nftName, symbol, description, image, mediaType,
+    };
+  } finally {
+    if (!cached) await ctx.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
+  }
+}
+
+// ===================================================================
+// MTS NFT transfer — send a native shielded token (an MTS NFT) from the
+// holder wallet to another wallet. No contract circuit needed: native
+// tokens move at the wallet level. `tokenType` is the token colour (hex)
+// the wallet holds (as shown by 1AM-style wallets).
+// ===================================================================
+export async function transferMtsNft(params: {
+  senderSeed: string;
+  tokenType: string;          // 64-char hex token colour
+  toShieldedAddress: string;  // recipient mn_shield-addr_...
+  amount?: string;            // default '1' (NFT)
+  dustSeed?: string;
+}) {
+  if (!/^[0-9a-fA-F]{64}$/.test(params.tokenType || '')) {
+    throw new Error('tokenType must be a 64-char hex token colour');
+  }
+  const { ctx: sender, cached: senderCached } = await getWalletCtx(params.senderSeed);
+  let dustSecretKey = sender.dustSecretKey;
+  let dustCtx: WalletContext | null = null;
+  let dustCached = false;
+  try {
+    if (params.dustSeed && params.dustSeed !== params.senderSeed) {
+      const dust = await getWalletCtx(params.dustSeed);
+      dustSecretKey = dust.ctx.dustSecretKey;
+      dustCtx = dust.ctx;
+      dustCached = dust.cached;
+    }
+
+    const parsed = MidnightBech32m.parse(params.toShieldedAddress);
+    const receiverAddress = parsed.decode(ShieldedAddress, getNetworkId());
+    const amount = BigInt(params.amount || '1');
+    if (amount <= 0n) throw new Error('amount must be > 0');
+
+    const tokenTransfer = [{
+      type: 'shielded' as const,
+      outputs: [{ type: params.tokenType.toLowerCase(), amount, receiverAddress }],
+    }];
+
+    const txHash = await withRetry(sender, async () => {
+      const ttl = new Date(Date.now() + 30 * 60 * 1000);
+      const recipe = await (sender.facade as any).transferTransaction(
+        tokenTransfer,
+        { shieldedSecretKeys: sender.shieldedSecretKeys, dustSecretKey },
+        { ttl },
+      );
+      const signFn = (payload: Uint8Array) => sender.unshieldedKeystore.signData(payload);
+      const signedRecipe = await (sender.facade as any).signRecipe(recipe, signFn);
+      const finalizedTx = await sender.facade.finalizeTransaction(signedRecipe.transaction);
+      return sender.facade.submitTransaction(finalizedTx);
+    });
+
+    return {
+      txHash,
+      tokenType: params.tokenType.toLowerCase(),
+      amount: amount.toString(),
+      to: params.toShieldedAddress,
+    };
+  } finally {
+    if (!senderCached) await sender.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
+  }
+}
+
+// ===================================================================
+// Deploy an MTS collection contract WITHOUT minting (for create-collection).
+// Returns the contractAddress + ownerSeed for subsequent mints.
+// ===================================================================
+export async function deployMtsCollection(params: {
+  seed: string;
+  dustSeed?: string;
+  collection?: string;
+  symbol?: string;
+}) {
+  const cfg = activeNetwork();
+  const MTS_PATH = path.join(path.dirname(CONTRACT_PATH), 'nmkr-mts');
+  const collectionName = params.collection || 'NMKR Collection';
+
+  const contractModule = await import(pathToFileURL(path.join(MTS_PATH, 'contract', 'index.js')).href);
+  const compiledContract = CompiledContract.make('nmkr-mts', contractModule.Contract).pipe(
+    CompiledContract.withVacantWitnesses,
+    CompiledContract.withCompiledFileAssets(path.join(MTS_PATH, 'keys')),
+  );
+
+  const { ctx, cached } = await getWalletCtxFast(params.seed);
+  const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.seed);
+  try {
+    const state: any = await Rx.firstValueFrom(ctx.facade.state());
+    const coinPublicKey = state.shielded.coinPublicKey.toHexString();
+    const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
+
+    const bridge = await createProviderBridge(ctx, dustCtx);
+    const zkConfigProvider = new NodeZkConfigProvider(MTS_PATH);
+    const providers = {
+      privateStateProvider: levelPrivateStateProvider({
+        privateStateStoreName: `mts-deploy-${Date.now()}-${Math.random().toString(36).substring(2, 10)}`,
+        privateStoragePasswordProvider: () => Promise.resolve(process.env.PRIVATE_STATE_PASSWORD || 'Midnight-NFT-Local-Dev-2026!'),
+        accountId: coinPublicKey.substring(0, 32),
+      }),
+      publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
+      zkConfigProvider,
+      proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
+      walletProvider: bridge,
+      midnightProvider: bridge,
+    };
+
+    const deployed = await withRetry(ctx, () => deployContract(providers, {
+      compiledContract,
+      privateStateId: 'mtsPrivateState',
+      initialPrivateState: {},
+      args: [collectionName, ownerPubKey],
+    }));
+
+    return {
+      contractAddress: deployed.deployTxData.public.contractAddress,
+      deployTxHash: (deployed as any).deployTxData?.public?.txHash,
+      collection: collectionName,
+      symbol: params.symbol || '',
+      ownerSeed: params.seed,
+      ownerCoinPublicKey: coinPublicKey,
+    };
+  } finally {
+    if (!cached) await ctx.facade.stop();
+    if (dustCtx && !dustCached) await dustCtx.facade.stop();
+  }
 }
