@@ -280,14 +280,26 @@ export async function getVersionInfo() {
 export function resolveShieldedAddress(shieldedAddr: string) {
   const parsed = MidnightBech32m.parse(shieldedAddr);
   const network = parsed.network;
+  // decode() takes the network explicitly. Do NOT let parsed.network leak into
+  // the SDK-global network id: for some HRPs (notably mainnet) parsed.network is
+  // a non-string (Symbol), and clobbering the configured id with it later crashes
+  // tx construction — getNetworkId() feeds passStringToWasm0, which needs a
+  // string (a Symbol yields a NaN length -> "memory access out of bounds").
+  // Snapshot the configured id and restore it after decoding.
+  let prevNetworkId: any;
+  try { prevNetworkId = getNetworkId(); } catch { prevNetworkId = undefined; }
   setNetworkId(network as any);
-  const shielded = parsed.decode(ShieldedAddress, network);
-  return {
-    coinPublicKey: shielded.coinPublicKey.toHexString(),
-    encryptionPublicKey: shielded.encryptionPublicKey.toHexString(),
-    network,
-    shieldedAddress: shieldedAddr,
-  };
+  try {
+    const shielded = parsed.decode(ShieldedAddress, network);
+    return {
+      coinPublicKey: shielded.coinPublicKey.toHexString(),
+      encryptionPublicKey: shielded.encryptionPublicKey.toHexString(),
+      network,
+      shieldedAddress: shieldedAddr,
+    };
+  } finally {
+    if (prevNetworkId !== undefined) setNetworkId(prevNetworkId as any);
+  }
 }
 
 export async function getBalanceByAddress(address: string) {
@@ -2027,6 +2039,12 @@ export async function deployAndMintMts(params: {
       walletProvider: bridge,
       midnightProvider: bridge,
     };
+
+    // Re-assert the configured network id right before tx construction: address
+    // parsing above (resolveShieldedAddress) touches the SDK-global network id,
+    // and the ledger tx builders read getNetworkId(). Must be the configured
+    // string (e.g. 'mainnet'), never a parsed-address Symbol.
+    setNetworkId(cfg.networkId as any);
 
     // Deploy a NEW collection, or mint into an EXISTING one (contractAddress given).
     let contractAddress: string;
