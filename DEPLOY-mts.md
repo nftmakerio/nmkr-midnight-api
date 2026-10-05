@@ -113,10 +113,20 @@ Mint-Response verwenden.
 
 ## Hinweise
 
-- **Proof-Server:** Server nutzt `api.1am.xyz` als Proof-Backend; unser Contract
-  schickt seine Prover-Keys mit (generischer Midnight-Proof-Server verarbeitet
-  das). Falls dort Limit/Auth greift → auf eigenen `midnightntwrk/proof-server`
-  ausweichen (läuft auch ohne AVX-512).
+- **Proof-Server-Version MUSS zur ledger-v8-Version passen** (kritisch!). Ein
+  Mismatch (z. B. Proof-Server 8.0.3 ↔ ledger-v8 8.1.2) führt beim Submit zu
+  `1010 Invalid Transaction: Custom error 170` = `InvalidDustSpendProof` (der
+  Node lehnt den Dust-Spend-Proof wegen veralteten Key-Materials ab). Für
+  ledger-v8 8.1.x den Proof-Server **8.1.3** nutzen
+  (`midnightntwrk/proof-server:8.1.3 -- midnight-proof-server --network mainnet`).
+  Der erste erfolgreiche Mainnet-Mint (2026-10-05) lief genau mit dieser Kombi.
+- **Proof-Backend des Servers:** Der Produktiv-Server zeigt auf `api.1am.xyz`.
+  Unbedingt sicherstellen, dass dieses Backend **version-gematcht (≥8.1.x)** ist
+  — sonst dort ebenfalls Error 170. Im Zweifel einen eigenen
+  `midnightntwrk/proof-server:8.1.3` fahren und `MIDNIGHT_PROOF_SERVER` darauf
+  zeigen (läuft auch ohne AVX-512).
+- **Mainnet-Contracts:** seit ~2026-10-04 freigeschaltet (davor `1016 pool
+  limit` = Deploys waren netzseitig noch nicht erlaubt, keine Dauerbeschränkung).
 - **Rollback:** Nur Branch-Checkout → Rückweg simpel:
   `git checkout <alter-commit/main>` + Service-Restart.
 - **Kein Cardano-Stack / AVX-512 nötig:** Der bestehende Server (Blockfrost als
