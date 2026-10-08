@@ -44,12 +44,12 @@ const CONTRACT_PATH = path.resolve(__dirname, '../../contracts/managed/nmkr-nft'
 // ---- Network ----
 // Single fixed network per instance (set via MIDNIGHT_NETWORK env var)
 
-let networkInitialized = false;
 function activeNetwork(): NetworkConfig {
-  if (!networkInitialized) {
-    setNetworkId(ACTIVE_NETWORK.networkId as any);
-    networkInitialized = true;
-  }
+  // Always re-assert this instance's fixed network id. Some SDK paths (shielded
+  // address parsing) clobber the SDK-global network id with a Symbol(Mainnet);
+  // if that leaks, a later ZswapSecretKeys.fromSeed traps "unreachable". Setting
+  // it on every call (idempotent; instance is single-network) defends all callers.
+  setNetworkId(ACTIVE_NETWORK.networkId as any);
   return ACTIVE_NETWORK;
 }
 
