@@ -12,6 +12,7 @@
     "proof-server": "docker run -p 6300:6300 midnightntwrk/proof-server:8.1.0 midnight-proof-server -v"
   },
   "dependencies": {
+    "@emurgo/cardano-serialization-lib-nodejs": "^17.0.0",
     "@midnight-ntwrk/compact-js": "2.5.1",
     "@midnight-ntwrk/compact-runtime": "0.16.0",
     "@midnight-ntwrk/ledger-v8": "8.1.2",

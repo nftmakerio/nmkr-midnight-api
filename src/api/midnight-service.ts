@@ -31,6 +31,7 @@ import * as Rx from 'rxjs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as bip39 from 'bip39';
+import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { type NetworkConfig, ACTIVE_NETWORK } from './networks.js';
 import { walletManager, type WalletContext } from './wallet-manager.js';
 
@@ -142,13 +143,35 @@ async function withWallet<T>(seed: string, cfg: NetworkConfig, fn: (ctx: WalletC
 // Public API
 // ================================================================
 
+// Derive the Cardano mainnet base address that belongs to the SAME mnemonic
+// as the Midnight wallet — this is the address 1AM shows and the one that can
+// hold cNIGHT to generate DUST on mainnet. Uses standard CIP-1852 (Icarus):
+// the root key comes from the BIP39 *entropy* (not the 64-byte seed, which is
+// a one-way PBKDF2 hash and cannot reproduce it), with empty passphrase.
+// Verified byte-exact against a real 1AM-generated wallet.
+export function deriveCardanoMainnetAddress(mnemonic: string): string {
+  const entropy = bip39.mnemonicToEntropy(mnemonic); // hex
+  const root = CSL.Bip32PrivateKey.from_bip39_entropy(Buffer.from(entropy, 'hex'), Buffer.from(''));
+  const harden = (n: number) => n + 0x80000000;
+  // m/1852'/1815'/0'
+  const account = root.derive(harden(1852)).derive(harden(1815)).derive(harden(0));
+  const paymentKey = account.derive(0).derive(0).to_public(); // .../0/0
+  const stakeKey = account.derive(2).derive(0).to_public();   // .../2/0
+  const addr = CSL.BaseAddress.new(
+    CSL.NetworkInfo.mainnet().network_id(),
+    CSL.Credential.from_keyhash(paymentKey.to_raw_key().hash()),
+    CSL.Credential.from_keyhash(stakeKey.to_raw_key().hash()),
+  );
+  return addr.to_address().to_bech32();
+}
+
 export function createNewWallet() {
   const cfg = activeNetwork();
   // Generate 24-word mnemonic (256 bits of entropy)
   const mnemonic = bip39.generateMnemonic(256);
   // Derive full 64-byte seed from mnemonic (compatible with 1AM/Lace wallets)
   const seed = bip39.mnemonicToSeedSync(mnemonic).toString('hex');
-  return { ...getWalletInfo(seed), mnemonic };
+  return { ...getWalletInfo(seed), mnemonic, cardanoAddress: deriveCardanoMainnetAddress(mnemonic) };
 }
 
 export function getWalletInfo(seed: string) {
@@ -178,7 +201,7 @@ export function recoverFromMnemonic(mnemonic: string) {
   }
   // Use full 64-byte seed (compatible with 1AM/Lace wallets)
   const seed = bip39.mnemonicToSeedSync(mnemonic).toString('hex');
-  return getWalletInfo(seed);
+  return { ...getWalletInfo(seed), cardanoAddress: deriveCardanoMainnetAddress(mnemonic) };
 }
 
 export async function getVersionInfo() {
