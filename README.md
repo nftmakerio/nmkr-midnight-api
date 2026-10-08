@@ -29,9 +29,9 @@ Built with the Midnight SDK (wallet-sdk-facade 3.0, midnight-js 4.0, ledger-v8) 
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/api/wallet/create` | Generate a new wallet (seed + mnemonic + addresses) |
-| POST | `/api/wallet/info` | Derive addresses from a seed |
-| POST | `/api/wallet/recover` | Recover a wallet from a 24-word BIP39 mnemonic |
+| POST | `/api/wallet/create` | Generate a new wallet (seed + mnemonic + Midnight addresses + `cardanoAddress`) |
+| POST | `/api/wallet/info` | Derive addresses from a seed (no `cardanoAddress` — needs the mnemonic) |
+| POST | `/api/wallet/recover` | Recover a wallet from a 24-word BIP39 mnemonic (includes `cardanoAddress`) |
 | POST | `/api/wallet/resolve-shielded` | Extract CoinPublicKey from a `mn_shield-addr_...` (e.g. Lace) |
 | GET | `/api/wallet/balance/:address` | NIGHT balance by address (no seed needed) |
 | POST | `/api/wallet/balance` | Balance by seed (includes dust info) |
@@ -211,6 +211,10 @@ docker run --rm -v $(pwd)/contracts/managed/nmkr-nft:/data \
 
 ```bash
 # Create a new wallet — save the seed and mnemonic somewhere safe!
+# The response also includes `cardanoAddress`: the Cardano mainnet address
+# derived from the same mnemonic (CIP-1852), i.e. the one 1AM shows. It holds
+# cNIGHT to generate DUST on mainnet. Only create/recover return it, since the
+# 64-byte seed cannot reproduce the mnemonic.
 curl -X POST http://localhost:3000/api/wallet/create
 
 # Fund the unshielded address via the faucet:
