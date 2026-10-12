@@ -171,6 +171,17 @@ class WalletManager {
     const saved = this.loadFromDisk();
     console.log(`[WalletManager] Loading ${saved.length} watched wallet(s) sequentially...`);
 
+    // Register every saved wallet immediately as a (suspended) placeholder.
+    // initialize() now runs in the background after the server is already
+    // listening; with placeholders in the map, a request for a watched wallet
+    // that is not connected yet finds it and resume()s it on demand instead of
+    // spinning up a second, temporary cold-sync context for the same seed.
+    for (const info of saved) {
+      if (!this.wallets.has(info.seed)) {
+        try { this.addSuspended(info); } catch {}
+      }
+    }
+
     // Connect and sync wallets one by one. The indexer can't handle many
     // simultaneous WebSocket subscriptions — they all stall.
     // Each wallet syncs fully before the next one starts.
@@ -178,8 +189,20 @@ class WalletManager {
       const info = saved[i];
       const label = info.label || info.seed.substring(0, 12) + '...';
       try {
+        const placeholder = this.wallets.get(info.seed);
+        if (placeholder?.ctx) {
+          console.log(`[WalletManager] (${i + 1}/${saved.length}) ${label} already connected on demand — skipping`);
+          continue;
+        }
         console.log(`[WalletManager] (${i + 1}/${saved.length}) Connecting ${label}...`);
-        const managed = await this.connect(info);
+        let managed: ManagedWallet;
+        if (placeholder && this.loadCachedState(info.seed)) {
+          await this.resume(placeholder);          // cached restore (shares an in-flight resume)
+          managed = placeholder;
+        } else {
+          this.wallets.delete(info.seed);          // no cache: connect() bootstraps out-of-process
+          managed = await this.connect(info);
+        }
         // Wait for this wallet to sync before starting the next one
         if (managed.ctx) {
           const syncStart = Date.now();
@@ -665,7 +688,25 @@ class WalletManager {
     }
   }
 
+  // Concurrent resume() calls for the same seed (background initialize, an API
+  // request, housekeeping) share ONE in-flight restore instead of each creating
+  // their own wallet context (duplicate sync loops, double memory).
+  private resuming = new Map<string, Promise<void>>();
+
   private async resume(managed: ManagedWallet) {
+    if (managed.ctx && managed.status === 'active') return;
+    if (managed.status === 'bootstrapping') {
+      throw new Error('Wallet is still building its dust cache (one-time bootstrap) — please retry later.');
+    }
+    const seed = managed.info.seed;
+    const inflight = this.resuming.get(seed);
+    if (inflight) return inflight;
+    const p = this.resumeImpl(managed).finally(() => this.resuming.delete(seed));
+    this.resuming.set(seed, p);
+    return p;
+  }
+
+  private async resumeImpl(managed: ManagedWallet) {
     console.log(`[WalletManager] Resuming ${managed.info.label || managed.info.seed.substring(0, 12)}...`);
 
     // Try restore from cache first (fast), fall back to full sync
@@ -688,18 +729,12 @@ class WalletManager {
       }
     }
 
-    // Full sync (no cache)
-    try {
-      const ctx = await this.createWalletContext(managed.info.seed, null);
-      managed.ctx = ctx;
-      managed.status = 'active';
-      managed.reconnectAttempts = 0;
-      this.subscribe(managed);
-    } catch (err: any) {
-      console.error(`[WalletManager] Resume failed: ${err.message}`);
-      managed.status = 'suspended';
-      throw err;
-    }
+    // No (usable) cache: do NOT cold-sync — the facade would accumulate the
+    // whole dust ledger in RAM (OOM). Build the cache out-of-process instead;
+    // housekeep() activates the wallet once the cache file is written.
+    this.spawnDustBootstrap(managed.info.seed);
+    managed.status = 'bootstrapping';
+    throw new Error('Wallet has no state cache yet — dust bootstrap started (one-time); please retry later.');
   }
 
   private async disconnect(seed: string, removeFromMap = true) {

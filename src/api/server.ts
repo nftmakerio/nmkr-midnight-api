@@ -1111,7 +1111,15 @@ app.post('/api/sync-fast/dust', async (req, res) => {
 // Initialize wallet manager (reconnect watched wallets), then start server
 addressWatcher.initialize();
 initEventCache().catch(err => console.warn(`[EventCache] init error: ${err.message}`));
-checkIndexerAndFallback().then(() => walletManager.initialize()).then(() => {
+// Start listening as soon as the indexer check is done; watched wallets sync in
+// the background. Previously the server only listened after ALL watched wallets
+// had synced sequentially (~1 min each) -> every restart meant minutes of 502s.
+// Watched wallets are registered as placeholders first, so requests for them
+// resume on demand (no duplicate contexts) while initialize() is still running.
+checkIndexerAndFallback().then(() => {
+  walletManager.initialize().catch((err: any) =>
+    console.error('[WalletManager] background initialize failed:', err?.message || err));
+}).then(() => {
   app.listen(PORT, () => {
     console.log('');
     console.log('=== Midnight API Server ===');
