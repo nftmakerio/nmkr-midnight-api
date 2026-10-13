@@ -2,7 +2,7 @@
   "name": "nmkr-midnight-api",
   "version": "1.1.0",
   "type": "module",
-  "description": "REST API for the Midnight Network — wallet management, NIGHT transfers, NFT minting with Swagger UI",
+  "description": "REST API for the Midnight Network \u2014 wallet management, NIGHT transfers, NFT minting with Swagger UI",
   "scripts": {
     "api": "NODE_OPTIONS=--max-old-space-size=16384 tsx src/api/server.ts",
     "api:preprod": "NODE_OPTIONS=--max-old-space-size=32768 MIDNIGHT_NETWORK=preprod tsx src/api/server.ts",
@@ -15,7 +15,7 @@
     "@emurgo/cardano-serialization-lib-nodejs": "^17.0.0",
     "@midnight-ntwrk/compact-js": "2.5.1",
     "@midnight-ntwrk/compact-runtime": "0.16.0",
-    "@midnight-ntwrk/ledger-v8": "8.1.2",
+    "@midnight-ntwrk/ledger-v8": "8.1.3",
     "@midnight-ntwrk/midnight-js-contracts": "4.1.1",
     "@midnight-ntwrk/midnight-js-http-client-proof-provider": "4.1.1",
     "@midnight-ntwrk/midnight-js-indexer-public-data-provider": "4.1.1",
@@ -41,7 +41,7 @@
     "ws": "^8.19.0"
   },
   "overrides": {
-    "@midnight-ntwrk/ledger-v8": "8.1.2"
+    "@midnight-ntwrk/ledger-v8": "8.1.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
