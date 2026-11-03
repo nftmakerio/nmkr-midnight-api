@@ -761,9 +761,13 @@ class WalletManager {
   // ---- Housekeeping: suspend idle, purge stale, reconnect failed, cache state ----
 
   private async housekeep() {
-    // 1. Cache state of all active synced wallets (for fast restore after restart)
+    // 1. Cache state of all active wallets (for fast restore after restart).
+    //    Also while not fully synced: the SDK state carries partial sync progress,
+    //    so a restart resumes from here instead of replaying from scratch (a full
+    //    shielded replay takes many hours on mainnet and never finished between
+    //    restarts, so no snapshot was ever written).
     for (const managed of this.wallets.values()) {
-      if (managed.status === 'active' && managed.synced && managed.lastState) {
+      if (managed.status === 'active' && managed.lastState) {
         this.serializeWalletState(managed);
       }
     }
@@ -855,7 +859,7 @@ class WalletManager {
       if (serialized.shielded.length > 10) {
         // Only write to disk if state actually changed
         const prev = managed.serializedState;
-        if (prev && prev.shielded === serialized.shielded && prev.dust === serialized.dust) return;
+        if (prev && prev.shielded === serialized.shielded && prev.unshielded === serialized.unshielded && prev.dust === serialized.dust) return;
 
         managed.serializedState = serialized;
         if (!fs.existsSync(STATE_CACHE_DIR)) fs.mkdirSync(STATE_CACHE_DIR, { recursive: true });
