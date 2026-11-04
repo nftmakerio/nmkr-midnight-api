@@ -12,7 +12,7 @@ Configs (`config.<net>.json`) und die Paywindow-Secrets liegen nur auf dem Serve
 
 | Pfad auf dem Server | Hier |
 |---|---|
-| `/opt/nmkr/nmkr-api-{mainnet,preview,preprod}` | Clones dieses Repos, Branch `mts-native-nft` |
+| `/opt/nmkr/nmkr-api-{mainnet,preview,preprod}` | Clones dieses Repos, Branch `main` (bis 2026-11-04: `mts-native-nft`) |
 | `/opt/nmkr/nmkr-paywindow-{mainnet,preprod,preview}` | Clones von `nmkr-midnight-paywindow` |
 | `/etc/systemd/system/` | `systemd/` |
 | `/opt/nmkr/bin/` | `bin/` |
