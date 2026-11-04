@@ -1938,6 +1938,24 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext)
   // because the owner facade (ctx) doesn't have the dust payer's dust coins.
   const useSeparateDust = !!dustCtx;
   const dustSecretKey = dustCtx ? dustCtx.dustSecretKey : ctx.dustSecretKey;
+  // The dust payer marks its dust coins as spent while balancing, but the tx is
+  // submitted through the OWNER facade, so the dust facade never learns when the
+  // node rejects it (e.g. 1010 / Custom error 170) and the coins stay spent in
+  // its local state for good — every following mint then fails with
+  // "could not balance dust" until the dust state is rebuilt. Remember the dust
+  // balancing tx and revert it when it does not make it on chain.
+  let pendingDustTx: any = null;
+  const revertPendingDust = async (why: string) => {
+    if (!pendingDustTx || !dustCtx) return;
+    const tx = pendingDustTx;
+    pendingDustTx = null;
+    try {
+      await (dustCtx.facade as any).dust.revertTransaction(tx);
+      console.log(`[DustRevert] released dust of unsubmitted balancing tx (${why})`);
+    } catch (e: any) {
+      console.error(`[DustRevert] revert failed (${why}): ${e?.message || e}`);
+    }
+  };
   return {
     getCoinPublicKey() { return state.shielded.coinPublicKey.toHexString(); },
     getEncryptionPublicKey() { return state.shielded.encryptionPublicKey.toHexString(); },
@@ -1945,6 +1963,9 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext)
       const expiry = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
 
       if (useSeparateDust) {
+        // A previous balancing that never got submitted (proving failed, retry…)
+        // still holds dust coins — release them before spending again.
+        await revertPendingDust('re-balance');
         // Step 1: Owner balances shielded + unshielded (no dust)
         const ownerRecipe = await (ctx.facade as any).balanceUnboundTransaction(
           tx,
@@ -1959,6 +1980,7 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext)
         const dustBalancingTx = await (dustCtx!.facade as any).dust.balanceTransactions(
           dustSecretKey, txsToBalance, expiry,
         );
+        pendingDustTx = dustBalancingTx;
         // Step 3: Merge into final recipe
         const mergedBalancing = (ctx.facade as any).mergeUnprovenTransactions(
           ownerRecipe.balancingTransaction, dustBalancingTx,
@@ -1983,7 +2005,16 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext)
       const signedRecipe = await (ctx.facade as any).signRecipe(recipe, signFn);
       return (ctx.facade as any).finalizeRecipe(signedRecipe);
     },
-    submitTx(tx: any) { return ctx.facade.submitTransaction(tx); },
+    async submitTx(tx: any) {
+      try {
+        const res = await ctx.facade.submitTransaction(tx);
+        pendingDustTx = null;   // on chain (or at least accepted) — dust is really spent
+        return res;
+      } catch (err: any) {
+        await revertPendingDust(`submit failed: ${String(err?.message || err).slice(0, 80)}`);
+        throw err;
+      }
+    },
   };
 }
 
