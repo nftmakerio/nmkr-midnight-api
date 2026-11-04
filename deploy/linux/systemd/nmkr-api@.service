@@ -1,0 +1,25 @@
+[Unit]
+Description=NMKR Midnight API (%i)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=nmkr
+Group=nmkr
+WorkingDirectory=/opt/nmkr/nmkr-api-%i
+# Heap pro Instanz. Windows: 40960 bei 128 GB RAM. Hier 96 GB: 2x40 GB ok, preprod zusätzlich NICHT ohne Senken.
+Environment=NODE_OPTIONS=--max-old-space-size=40960
+# EventCache-Subscriber AUS. Nur die ENV wirkt (cacheReadonly in der Config greift unter tsx nicht).
+Environment=MIDNIGHT_CACHE_READONLY=true
+Environment=ACCESS_LOG=2
+Environment=ACCESS_LOG_DIR=/var/log/nmkr/access/
+ExecStart=/usr/bin/node node_modules/tsx/dist/cli.mjs src/api/server.ts --config config.%i.json
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=append:/var/log/nmkr/api-%i.log
+StandardError=append:/var/log/nmkr/api-%i.err.log
+
+[Install]
+WantedBy=multi-user.target

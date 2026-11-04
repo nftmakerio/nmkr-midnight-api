@@ -1,0 +1,17 @@
+/var/log/nmkr/*.log {
+    daily
+    rotate 14
+    maxsize 100M
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+/var/log/nmkr/access/*.log {
+    weekly
+    rotate 8
+    compress
+    missingok
+    notifempty
+}

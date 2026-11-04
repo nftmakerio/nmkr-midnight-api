@@ -1,0 +1,5 @@
+[Unit]
+Description=NMKR API ledger/hang probe
+[Service]
+Type=oneshot
+ExecStart=/opt/nmkr/bin/nmkr-probe.sh

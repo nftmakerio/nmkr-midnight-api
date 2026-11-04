@@ -1,0 +1,7 @@
+[Unit]
+Description=Run NMKR API probe every 3 minutes
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=3min
+[Install]
+WantedBy=timers.target

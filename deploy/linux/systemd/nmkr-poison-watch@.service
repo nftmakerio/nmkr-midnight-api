@@ -1,0 +1,12 @@
+[Unit]
+Description=NMKR API WASM-poison watcher (%i)
+After=nmkr-api@%i.service
+
+[Service]
+Type=simple
+ExecStart=/opt/nmkr/bin/nmkr-poison-watch.sh %i
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

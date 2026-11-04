@@ -1,0 +1,217 @@
+    server {
+        listen       80;
+        server_name  midnight-api.nmkr.io midnight-api.mainnet.nmkr.io midnight-api.preprod.nmkr.io midnight-api.preview.nmkr.io midnight-paywindow.nmkr.io midnight-paywindow.preprod.nmkr.io midnight-paywindow.preview.nmkr.io midnight-paywindow-api.nmkr.io midnight-paywindow-api.preprod.nmkr.io midnight-paywindow-api.preview.nmkr.io;
+        location /.well-known/acme-challenge/ {
+            root /var/www/acme-challenge;
+        }
+        location / {
+            return 301 https://$host$request_uri;
+        }
+    }
+
+    # --- HTTPS: Mainnet ---
+    server {
+        listen       443 ssl;
+        server_name  midnight-api.nmkr.io midnight-api.mainnet.nmkr.io;
+        ssl_certificate      /etc/letsencrypt/live/midnight-api.mainnet.nmkr.io/fullchain.pem;
+        ssl_certificate_key  /etc/letsencrypt/live/midnight-api.mainnet.nmkr.io/privkey.pem;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        TLSv1.2 TLSv1.3;
+        ssl_ciphers          HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers  on;
+        location / {
+            proxy_pass         http://127.0.0.1:3003;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_read_timeout 600s;
+        }
+    }
+
+    # --- HTTPS: Preprod ---
+    server {
+        listen       443 ssl;
+        server_name  midnight-api.preprod.nmkr.io;
+        ssl_certificate      /etc/letsencrypt/live/midnight-api.preprod.nmkr.io/fullchain.pem;
+        ssl_certificate_key  /etc/letsencrypt/live/midnight-api.preprod.nmkr.io/privkey.pem;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        TLSv1.2 TLSv1.3;
+        ssl_ciphers          HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers  on;
+        location / {
+            proxy_pass         http://127.0.0.1:3001;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_read_timeout 600s;
+        }
+    }
+
+    # --- HTTPS: Preview ---
+    server {
+        listen       443 ssl;
+        server_name  midnight-api.preview.nmkr.io;
+        ssl_certificate      /etc/letsencrypt/live/midnight-api.preview.nmkr.io/fullchain.pem;
+        ssl_certificate_key  /etc/letsencrypt/live/midnight-api.preview.nmkr.io/privkey.pem;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        TLSv1.2 TLSv1.3;
+        ssl_ciphers          HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers  on;
+        location / {
+            proxy_pass         http://127.0.0.1:3002;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_read_timeout 600s;
+        }
+    }
+
+    # --- HTTPS: Paywindow Mainnet ---
+    server {
+        listen       443 ssl;
+        server_name  midnight-paywindow.nmkr.io;
+        ssl_certificate      /etc/letsencrypt/live/midnight-paywindow.nmkr.io/fullchain.pem;
+        ssl_certificate_key  /etc/letsencrypt/live/midnight-paywindow.nmkr.io/privkey.pem;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        TLSv1.2 TLSv1.3;
+        ssl_ciphers          HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers  on;
+        location / {
+            proxy_pass         http://127.0.0.1:4100;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_read_timeout 600s;
+        }
+    }
+
+    # --- HTTPS: Paywindow Preprod ---
+    server {
+        listen       443 ssl;
+        server_name  midnight-paywindow.preprod.nmkr.io;
+        ssl_certificate      /etc/letsencrypt/live/midnight-paywindow.preprod.nmkr.io/fullchain.pem;
+        ssl_certificate_key  /etc/letsencrypt/live/midnight-paywindow.preprod.nmkr.io/privkey.pem;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        TLSv1.2 TLSv1.3;
+        ssl_ciphers          HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers  on;
+        location / {
+            proxy_pass         http://127.0.0.1:4101;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_read_timeout 600s;
+        }
+    }
+
+    # --- HTTPS: Paywindow API Mainnet ---
+    server {
+        listen       443 ssl;
+        server_name  midnight-paywindow-api.nmkr.io;
+        ssl_certificate      /etc/letsencrypt/live/midnight-paywindow-api.nmkr.io/fullchain.pem;
+        ssl_certificate_key  /etc/letsencrypt/live/midnight-paywindow-api.nmkr.io/privkey.pem;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        TLSv1.2 TLSv1.3;
+        ssl_ciphers          HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers  on;
+        location / {
+            proxy_pass         http://127.0.0.1:4100;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_read_timeout 600s;
+        }
+    }
+
+    # --- HTTPS: Paywindow API Preprod ---
+    server {
+        listen       443 ssl;
+        server_name  midnight-paywindow-api.preprod.nmkr.io;
+        ssl_certificate      /etc/letsencrypt/live/midnight-paywindow-api.preprod.nmkr.io/fullchain.pem;
+        ssl_certificate_key  /etc/letsencrypt/live/midnight-paywindow-api.preprod.nmkr.io/privkey.pem;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        TLSv1.2 TLSv1.3;
+        ssl_ciphers          HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers  on;
+        location / {
+            proxy_pass         http://127.0.0.1:4101;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_read_timeout 600s;
+        }
+    }
+
+    # --- HTTPS: Paywindow Preview ---
+    server {
+        listen       443 ssl;
+        server_name  midnight-paywindow.preview.nmkr.io;
+        ssl_certificate      /etc/letsencrypt/live/midnight-paywindow.preview.nmkr.io/fullchain.pem;
+        ssl_certificate_key  /etc/letsencrypt/live/midnight-paywindow.preview.nmkr.io/privkey.pem;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        TLSv1.2 TLSv1.3;
+        ssl_ciphers          HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers  on;
+        location / {
+            proxy_pass         http://127.0.0.1:4102;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_read_timeout 600s;
+        }
+    }
+
+    # --- HTTPS: Paywindow API Preview ---
+    server {
+        listen       443 ssl;
+        server_name  midnight-paywindow-api.preview.nmkr.io;
+        ssl_certificate      /etc/letsencrypt/live/midnight-paywindow-api.preview.nmkr.io/fullchain.pem;
+        ssl_certificate_key  /etc/letsencrypt/live/midnight-paywindow-api.preview.nmkr.io/privkey.pem;
+        ssl_session_cache    shared:SSL:1m;
+        ssl_session_timeout  5m;
+        ssl_protocols        TLSv1.2 TLSv1.3;
+        ssl_ciphers          HIGH:!aNULL:!MD5;
+        ssl_prefer_server_ciphers  on;
+        location / {
+            proxy_pass         http://127.0.0.1:4102;
+            proxy_set_header   Host $host;
+            proxy_set_header   X-Real-IP $remote_addr;
+            proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header   X-Forwarded-Proto $scheme;
+            proxy_connect_timeout 600s;
+            proxy_send_timeout 600s;
+            proxy_read_timeout 600s;
+        }
+    }
