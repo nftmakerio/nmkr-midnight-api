@@ -267,7 +267,7 @@ export async function fastSyncDust(seedHex: string, opts: { fromIndex?: number }
     v9DeserializeErrors: v9Errors,
     durationMs: Date.now() - start,
     dustBalanceRaw: totalRaw.toString(),
-    dustBalanceFormatted: `${(Number(totalRaw) / 1_000_000_000_000).toFixed(4)} DUST`,
+    dustBalanceFormatted: `${(Number(totalRaw) / 1_000_000_000_000_000).toFixed(4)} DUST`,
     utxoCount: utxos.length,
     utxos: utxos.slice(0, 20).map((u: any) => ({
       initialValue: String(u.initialValue ?? 0),

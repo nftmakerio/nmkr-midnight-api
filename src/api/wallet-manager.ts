@@ -455,7 +455,7 @@ class WalletManager {
       }
     } catch { dustOk = false; }
     try { dustCoins = m.lastState?.dust?.availableCoins?.length ?? 0; } catch { dustOk = false; }
-    const dustNum = Number(dustRaw) / 1_000_000_000_000;
+    const dustNum = Number(dustRaw) / 1_000_000_000_000_000; // 1 DUST = 10^15 specks
 
     // Sync progress
     let sp: any = null, up: any = null, dp: any = null;

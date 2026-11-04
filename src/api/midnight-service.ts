@@ -352,7 +352,7 @@ function getDustBalance(dustState: any): { dustRaw: string; dustFormatted: strin
       dustRaw = cb.getWalletBalance(dustState.state, new Date()).toString();
     }
   } catch {}
-  const dustNum = Number(dustRaw) / 1_000_000_000_000;
+  const dustNum = Number(dustRaw) / 1_000_000_000_000_000; // 1 DUST = 10^15 specks
   return {
     dustRaw,
     dustFormatted: `${dustNum.toFixed(4)} DUST`,
