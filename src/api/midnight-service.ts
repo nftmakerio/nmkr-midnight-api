@@ -4,11 +4,11 @@
 // =============================================================
 
 import { WebSocket } from 'ws';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { unshieldedToken } from '@midnight-ntwrk/ledger-v8';
+import * as ledger from '@midnightntwrk/ledger-v9';
+import { unshieldedToken } from '@midnightntwrk/ledger-v9';
 import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
 import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
-import { HDWallet, Roles, generateRandomSeed } from '@midnight-ntwrk/wallet-sdk-hd';
+import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
 import {
   createKeystore,
@@ -20,7 +20,10 @@ import {
   ShieldedAddress, ShieldedCoinPublicKey, ShieldedEncryptionPublicKey,
   MidnightBech32m, UnshieldedAddress,
 } from '@midnight-ntwrk/wallet-sdk-address-format';
-import { setNetworkId, getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
+import { setNetworkId, getNetworkId } from './network-id.js';
+import { WalletTransaction, ProtocolVersion } from '@midnight-ntwrk/wallet-sdk-abstractions';
+import { DefaultForkSchedule } from '@midnight-ntwrk/wallet-sdk-facade';
+import { createLedger9WalletProvider, createLedger9MidnightProvider } from '@midnight-ntwrk/midnight-js-types';
 import { deployContract, createCallTxOptions, submitCallTx, findDeployedContract } from '@midnight-ntwrk/midnight-js-contracts';
 import { httpClientProofProvider } from '@midnight-ntwrk/midnight-js-http-client-proof-provider';
 import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-public-data-provider';
@@ -100,6 +103,7 @@ const RETRYABLE_PATTERNS = [
 ];
 
 const MAX_TX_RETRIES = 2;
+const TX_TTL_SECONDS = 30 * 60;   // lifetime of built transactions (Midnight.js 5 config)
 const RETRY_WAIT_MS = 6_000; // wait 6s for new block/state update
 
 function isRetryableError(err: any): boolean {
@@ -180,7 +184,7 @@ export function getWalletInfo(seed: string) {
   const zswapKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
   const coinPublicKey = zswapKeys.coinPublicKey as string;
   const encPublicKey = zswapKeys.encryptionPublicKey as string;
-  const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], getNetworkId());
+  const unshieldedKeystore = createKeystore({ kind: 'schnorr', secret: keys[Roles.NightExternal] }, getNetworkId());
 
   const shieldedCpk = ShieldedCoinPublicKey.fromHexString(coinPublicKey);
   const shieldedEpk = ShieldedEncryptionPublicKey.fromHexString(encPublicKey);
@@ -346,12 +350,7 @@ export async function getBalanceByAddress(address: string) {
 
 function getDustBalance(dustState: any): { dustRaw: string; dustFormatted: string; dustCoins: number } {
   let dustRaw = '0';
-  try {
-    const cb = dustState.capabilities?.coinsAndBalances;
-    if (cb && typeof cb.getWalletBalance === 'function') {
-      dustRaw = cb.getWalletBalance(dustState.state, new Date()).toString();
-    }
-  } catch {}
+  try { dustRaw = dustState.balance(new Date()).toString(); } catch {}
   const dustNum = Number(dustRaw) / 1_000_000_000_000_000; // 1 DUST = 10^15 specks
   return {
     dustRaw,
@@ -613,8 +612,9 @@ export async function deployAndMintNft(params: {
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
       zkConfigProvider,
       proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
-      walletProvider: bridge,
-      midnightProvider: bridge,
+      walletProvider: bridge.walletProvider,
+      midnightProvider: bridge.midnightProvider,
+      config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     };
 
     const deployed = await deployContract(providers, {
@@ -1023,7 +1023,7 @@ export async function createCollection(params: {
   checkLen('mediaType', mediaType);
 
   // Generate seed or use existing one
-  const seed = params.seed || Buffer.from(generateRandomSeed()).toString('hex');
+  const seed = params.seed || (await import('node:crypto')).randomBytes(64).toString('hex');
   const walletInfo = getWalletInfo(seed);
 
   const contractModule = await import(pathToFileURL(path.join(CONTRACT_PATH, 'contract', 'index.js')).href);
@@ -1052,8 +1052,9 @@ export async function createCollection(params: {
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
       zkConfigProvider,
       proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
-      walletProvider: bridge,
-      midnightProvider: bridge,
+      walletProvider: bridge.walletProvider,
+      midnightProvider: bridge.midnightProvider,
+      config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     };
 
     const deployed = await deployContract(providers, {
@@ -1161,8 +1162,9 @@ export async function mintNft(params: {
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
       zkConfigProvider,
       proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
-      walletProvider: bridge,
-      midnightProvider: bridge,
+      walletProvider: bridge.walletProvider,
+      midnightProvider: bridge.midnightProvider,
+      config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     };
 
     const contract = await findDeployedContract(providers, {
@@ -1254,8 +1256,9 @@ export async function mintBatchNft(params: {
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
       zkConfigProvider,
       proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
-      walletProvider: bridge,
-      midnightProvider: bridge,
+      walletProvider: bridge.walletProvider,
+      midnightProvider: bridge.midnightProvider,
+      config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     };
 
     const contract = await findDeployedContract(providers, {
@@ -1359,8 +1362,9 @@ export async function transferNft(params: {
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
       zkConfigProvider,
       proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
-      walletProvider: bridge,
-      midnightProvider: bridge,
+      walletProvider: bridge.walletProvider,
+      midnightProvider: bridge.midnightProvider,
+      config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     };
 
     const contract = await findDeployedContract(providers, {
@@ -1424,8 +1428,9 @@ async function callContract<T>(
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
       zkConfigProvider,
       proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
-      walletProvider: bridge,
-      midnightProvider: bridge,
+      walletProvider: bridge.walletProvider,
+      midnightProvider: bridge.midnightProvider,
+      config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     };
 
     const contract = await findDeployedContract(providers, {
@@ -1662,8 +1667,9 @@ async function runBuildUnsealedMintTx(params: {
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
       zkConfigProvider,
       proofProvider,
-      walletProvider: bridge,
-      midnightProvider: bridge,
+      walletProvider: bridge.walletProvider,
+      midnightProvider: bridge.midnightProvider,
+      config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     } as any;
 
     const callOptions = await step('createCallTxOptions', () => createCallTxOptions(
@@ -1922,6 +1928,50 @@ export async function burnNft(params: {
 // Creates the provider bridge that midnight-js uses for balancing, signing and submitting.
 // If a separate dustCtx is provided, its dust keys are used for fee payment instead of the
 // main wallet's keys. This lets one wallet own/authorize the contract while another pays fees.
+// The facade's acting protocol version (ledger 9 on a chain past the fork).
+async function activeProtocolVersion(ctx: WalletContext) {
+  const s: any = await Rx.firstValueFrom(ctx.facade.state());
+  return s.activeProtocolVersion;
+}
+
+// Unwrap a FinalizedTx handle into the ledger-9 transaction Midnight.js wants back.
+function unwrapFinalizedV9(finalized: any, active: any): ledger.FinalizedTransaction {
+  const accepted = ProtocolVersion.epochOf(active, DefaultForkSchedule.v9);
+  const unwrapped: any = (WalletTransaction as any).unwrapWithin(finalized, accepted);
+  if (unwrapped._tag === 'Left') throw unwrapped.left;
+  return unwrapped.right;
+}
+
+// Balance → sign → prove an UnboundTx handle. With a separate dust payer the
+// owner balances shielded + unshielded only and the payer adds the dust fee
+// (its spends are reverted if the tx is never submitted, see below).
+async function balanceSignFinalize(
+  ctx: WalletContext,
+  dustCtx: WalletContext | undefined,
+  unbound: any,
+  ttl: Date,
+  onDustTx: (tx: any) => void,
+): Promise<any> {
+  const signFn = (payload: Uint8Array) => ctx.unshieldedKeystore.signDataAsync(payload);
+  if (!dustCtx) {
+    const recipe = await (ctx.facade as any).balanceUnboundTransaction(unbound, { ttl });
+    const signed = await (ctx.facade as any).signRecipe(recipe, signFn);
+    return (ctx.facade as any).finalizeRecipe(signed);
+  }
+  const ownerRecipe = await (ctx.facade as any).balanceUnboundTransaction(unbound, {
+    ttl, tokenKindsToBalance: ['shielded', 'unshielded'],
+  });
+  const toPay = [ownerRecipe.baseTransaction, ownerRecipe.balancingTransaction].filter(Boolean);
+  const { transaction: dustTx } = await (dustCtx.facade as any).dust.balanceTransactions(toPay, ttl);
+  onDustTx(dustTx);
+  const merged = ownerRecipe.balancingTransaction
+    ? await (ctx.facade as any).mergeUnprovenTransactions(ownerRecipe.balancingTransaction, dustTx)
+    : dustTx;
+  const recipe = { ...ownerRecipe, balancingTransaction: merged };
+  const signed = await (ctx.facade as any).signRecipe(recipe, signFn);
+  return (ctx.facade as any).finalizeRecipe(signed);
+}
+
 async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext) {
   // We only need the owner's identity keys (coinPublicKey / encryptionPublicKey)
   // here — those are available immediately. Do NOT wait for a full `isSynced`
@@ -1934,87 +1984,60 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext)
       Rx.timeout(60_000),
     ),
   );
-  // When a separate dustCtx is provided, we must use its facade for dust balancing
-  // because the owner facade (ctx) doesn't have the dust payer's dust coins.
-  const useSeparateDust = !!dustCtx;
-  const dustSecretKey = dustCtx ? dustCtx.dustSecretKey : ctx.dustSecretKey;
-  // The dust payer marks its dust coins as spent while balancing, but the tx is
-  // submitted through the OWNER facade, so the dust facade never learns when the
-  // node rejects it (e.g. 1010 / Custom error 170) and the coins stay spent in
-  // its local state for good — every following mint then fails with
-  // "could not balance dust" until the dust state is rebuilt. Remember the dust
-  // balancing tx and revert it when it does not make it on chain.
+  // The dust payer books its dust while balancing, but the tx is submitted
+  // through the OWNER facade, so the payer never learns when the node rejects
+  // it. Remember the payer's dust tx and revert it when it does not make it on
+  // chain, or the coins stay booked and every following mint fails with
+  // "could not balance dust".
   let pendingDustTx: any = null;
   const revertPendingDust = async (why: string) => {
     if (!pendingDustTx || !dustCtx) return;
     const tx = pendingDustTx;
     pendingDustTx = null;
     try {
-      await (dustCtx.facade as any).dust.revertTransaction(tx);
+      await (dustCtx.facade as any).revertTransaction(tx, why);
       console.log(`[DustRevert] released dust of unsubmitted balancing tx (${why})`);
     } catch (e: any) {
       console.error(`[DustRevert] revert failed (${why}): ${e?.message || e}`);
     }
   };
-  return {
-    getCoinPublicKey() { return state.shielded.coinPublicKey.toHexString(); },
-    getEncryptionPublicKey() { return state.shielded.encryptionPublicKey.toHexString(); },
+
+  const walletProvider = createLedger9WalletProvider({
+    getCoinPublicKey: () => state.shielded.coinPublicKey.toHexString(),
+    getEncryptionPublicKey: () => state.shielded.encryptionPublicKey.toHexString(),
     async balanceTx(tx: any, ttl?: Date) {
+      await revertPendingDust('re-balance');
+      const active = await activeProtocolVersion(ctx);
+      const unbound = WalletTransaction.adopt('Unbound', tx.deserialize({ v9: ledger.Transaction }), active);
       const expiry = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
-
-      if (useSeparateDust) {
-        // A previous balancing that never got submitted (proving failed, retry…)
-        // still holds dust coins — release them before spending again.
-        await revertPendingDust('re-balance');
-        // Step 1: Owner balances shielded + unshielded (no dust)
-        const ownerRecipe = await (ctx.facade as any).balanceUnboundTransaction(
-          tx,
-          { shieldedSecretKeys: ctx.shieldedSecretKeys, dustSecretKey: ctx.dustSecretKey },
-          { ttl: expiry, tokenKindsToBalance: ['shielded', 'unshielded'] },
-        );
-        // Step 2: DustPayer balances dust using the base transaction from step 1
-        const baseTx = ownerRecipe.baseTransaction ?? tx;
-        const txsToBalance = ownerRecipe.balancingTransaction
-          ? [baseTx, ownerRecipe.balancingTransaction]
-          : [baseTx];
-        const dustBalancingTx = await (dustCtx!.facade as any).dust.balanceTransactions(
-          dustSecretKey, txsToBalance, expiry,
-        );
-        pendingDustTx = dustBalancingTx;
-        // Step 3: Merge into final recipe
-        const mergedBalancing = (ctx.facade as any).mergeUnprovenTransactions(
-          ownerRecipe.balancingTransaction, dustBalancingTx,
-        );
-        const finalRecipe = {
-          type: 'UNBOUND_TRANSACTION',
-          baseTransaction: baseTx,
-          balancingTransaction: mergedBalancing ?? undefined,
-        };
-        const signFn = (payload: Uint8Array) => ctx.unshieldedKeystore.signData(payload);
-        const signedRecipe = await (ctx.facade as any).signRecipe(finalRecipe, signFn);
-        return (ctx.facade as any).finalizeRecipe(signedRecipe);
-      }
-
-      // No separate dust payer — standard single-wallet flow
-      const recipe = await (ctx.facade as any).balanceUnboundTransaction(
-        tx,
-        { shieldedSecretKeys: ctx.shieldedSecretKeys, dustSecretKey },
-        { ttl: expiry },
-      );
-      const signFn = (payload: Uint8Array) => ctx.unshieldedKeystore.signData(payload);
-      const signedRecipe = await (ctx.facade as any).signRecipe(recipe, signFn);
-      return (ctx.facade as any).finalizeRecipe(signedRecipe);
-    },
-    async submitTx(tx: any) {
       try {
-        const res = await ctx.facade.submitTransaction(tx);
-        pendingDustTx = null;   // on chain (or at least accepted) — dust is really spent
-        return res;
+        const finalized = await balanceSignFinalize(ctx, dustCtx, unbound, expiry, (d) => { pendingDustTx = d; });
+        return unwrapFinalizedV9(finalized, active);
       } catch (err: any) {
-        await revertPendingDust(`submit failed: ${String(err?.message || err).slice(0, 80)}`);
+        await revertPendingDust(`balance/prove failed: ${String(err?.message || err).slice(0, 80)}`);
         throw err;
       }
     },
+  } as any);
+
+  const midnightProvider = createLedger9MidnightProvider(async (tx: any) => {
+    const active = await activeProtocolVersion(ctx);
+    const finalized = WalletTransaction.adopt('Finalized', tx.deserialize({ v9: ledger.Transaction }), active);
+    try {
+      const res = await ctx.facade.submitTransaction(finalized as any);
+      pendingDustTx = null;   // accepted — the dust is really spent
+      return res as any;
+    } catch (err: any) {
+      await revertPendingDust(`submit failed: ${String(err?.message || err).slice(0, 80)}`);
+      throw err;
+    }
+  });
+
+  return {
+    getCoinPublicKey: () => state.shielded.coinPublicKey.toHexString(),
+    getEncryptionPublicKey: () => state.shielded.encryptionPublicKey.toHexString(),
+    walletProvider,
+    midnightProvider,
   };
 }
 
@@ -2090,8 +2113,9 @@ export async function deployAndMintMts(params: {
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
       zkConfigProvider,
       proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
-      walletProvider: bridge,
-      midnightProvider: bridge,
+      walletProvider: bridge.walletProvider,
+      midnightProvider: bridge.midnightProvider,
+      config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     };
 
     // Re-assert the configured network id right before tx construction: address
@@ -2290,8 +2314,9 @@ export async function deployMtsCollection(params: {
       publicDataProvider: indexerPublicDataProvider(cfg.indexerHttp, cfg.indexerWs),
       zkConfigProvider,
       proofProvider: httpClientProofProvider(cfg.proofServer, zkConfigProvider),
-      walletProvider: bridge,
-      midnightProvider: bridge,
+      walletProvider: bridge.walletProvider,
+      midnightProvider: bridge.midnightProvider,
+      config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     };
 
     const deployed = await withRetry(ctx, () => deployContract(providers, {

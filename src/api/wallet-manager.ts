@@ -14,11 +14,11 @@
 
 import { WebSocket } from 'ws';
 import { spawn } from 'node:child_process';
-import * as ledger from '@midnight-ntwrk/ledger-v8';
-import { unshieldedToken } from '@midnight-ntwrk/ledger-v8';
+import * as ledger from '@midnightntwrk/ledger-v9';
+import { unshieldedToken } from '@midnightntwrk/ledger-v9';
 import { WalletFacade } from '@midnight-ntwrk/wallet-sdk-facade';
 import { DustWallet } from '@midnight-ntwrk/wallet-sdk-dust-wallet';
-import { HDWallet, Roles } from '@midnight-ntwrk/wallet-sdk-hd';
+import { HDWallet, Roles, WalletSeeds } from '@midnight-ntwrk/wallet-sdk-hd';
 import { ShieldedWallet } from '@midnight-ntwrk/wallet-sdk-shielded';
 import {
   createKeystore,
@@ -31,12 +31,13 @@ import {
   ShieldedCoinPublicKey, ShieldedEncryptionPublicKey,
   ShieldedAddress, MidnightBech32m,
 } from '@midnight-ntwrk/wallet-sdk-address-format';
-import { setNetworkId, getNetworkId } from '@midnight-ntwrk/midnight-js-network-id';
+import { setNetworkId, getNetworkId } from './network-id.js';
 import * as Rx from 'rxjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { type NetworkConfig, ACTIVE_NETWORK } from './networks.js';
+import { dustTimelineStartProbe } from './dust-fork-start.js';
 
 // @ts-expect-error: Needed for GraphQL subscriptions
 globalThis.WebSocket = WebSocket;
@@ -68,9 +69,12 @@ export interface WatchedWalletInfo {
 
 export interface WalletContext {
   facade: WalletFacade;
+  // ledger-v9 key objects (identity only — the SDK 2.x wallets hold their own
+  // per-ledger-version keys, derived from `seeds`, and balancing no longer takes keys).
   shieldedSecretKeys: ledger.ZswapSecretKeys;
   dustSecretKey: ledger.DustSecretKey;
   unshieldedKeystore: UnshieldedKeystore;
+  seeds: WalletSeeds;
 }
 
 type WalletStatus = 'active' | 'suspended' | 'reconnecting' | 'bootstrapping';
@@ -114,7 +118,7 @@ function getAddresses(seed: string, networkId: string) {
   const zswapKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
   const coinPublicKey = zswapKeys.coinPublicKey as string;
   const encPublicKey = zswapKeys.encryptionPublicKey as string;
-  const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], networkId);
+  const unshieldedKeystore = createKeystore({ kind: 'schnorr', secret: keys[Roles.NightExternal] }, networkId);
   const shieldedCpk = ShieldedCoinPublicKey.fromHexString(coinPublicKey);
   const shieldedEpk = ShieldedEncryptionPublicKey.fromHexString(encPublicKey);
   const shieldedAddr = MidnightBech32m.encode(networkId, new ShieldedAddress(shieldedCpk, shieldedEpk));
@@ -449,10 +453,7 @@ class WalletManager {
     // `RuntimeError: unreachable`. Isolate BOTH reads so one broken wallet can't
     // take down the whole /api/watch/list — the wallet is flagged with dustError instead.
     try {
-      const cb = m.lastState?.dust?.capabilities?.coinsAndBalances;
-      if (cb && typeof cb.getWalletBalance === 'function') {
-        dustRaw = cb.getWalletBalance(m.lastState.dust.state, new Date()).toString();
-      }
+      if (m.lastState?.dust) dustRaw = m.lastState.dust.balance(new Date()).toString();
     } catch { dustOk = false; }
     try { dustCoins = m.lastState?.dust?.availableCoins?.length ?? 0; } catch { dustOk = false; }
     const dustNum = Number(dustRaw) / 1_000_000_000_000_000; // 1 DUST = 10^15 specks
@@ -550,40 +551,14 @@ class WalletManager {
     // Fast-sync from MySQL is exposed via /api/sync-fast endpoints for read
     // operations only.
 
-    // No cache → do NOT cold-sync. The facade would accumulate the entire dust
-    // ledger (~1.5M events) in RAM and OOM the process. Instead build the dust
-    // cache OUT-OF-PROCESS (memory-safe batched apply) and register the wallet
-    // as 'bootstrapping'; housekeep() activates it once the cache is written.
+    // No cache → fresh start. With wallet-sdk 2.x the dust wallet begins at the
+    // ledger-9 fork (skipLedgerV8DustHistory), so the old out-of-process dust
+    // bootstrap (a ledger-v8 replay of ~1.6M events) is no longer needed.
+    // createWalletContext drops an unreadable cache itself and starts fresh.
     if (!cachedState) {
-      this.spawnDustBootstrap(info.seed);
-      const managed: ManagedWallet = {
-        info, ctx: null, status: 'bootstrapping', synced: false, lastState: null,
-        serializedState: null, reconnectAttempts: 0, addresses,
-      };
-      this.wallets.set(info.seed, managed);
-      this.indexAddresses(managed);
-      return managed;
+      console.log(`[WalletManager] No cached state for ${info.seed.substring(0, 12)}... — fresh start (dust from the ledger-9 fork)`);
     }
-
-    let ctx: WalletContext;
-    try {
-      ctx = await this.createWalletContext(info.seed, cachedState);
-    } catch {
-      // Cache stale/corrupt → drop it and re-bootstrap (never cold-sync).
-      console.warn(`[WalletManager] Cached connect failed for ${info.seed.substring(0, 12)}..., re-bootstrapping dust cache`);
-      try {
-        const cacheFile = path.join(STATE_CACHE_DIR, `${info.seed.substring(0, 16)}.json`);
-        if (fs.existsSync(cacheFile)) fs.unlinkSync(cacheFile);
-      } catch {}
-      this.spawnDustBootstrap(info.seed);
-      const managed: ManagedWallet = {
-        info, ctx: null, status: 'bootstrapping', synced: false, lastState: null,
-        serializedState: null, reconnectAttempts: 0, addresses,
-      };
-      this.wallets.set(info.seed, managed);
-      this.indexAddresses(managed);
-      return managed;
-    }
+    const ctx = await this.createWalletContext(info.seed, cachedState);
 
     const managed: ManagedWallet = {
       info, ctx, status: 'active', synced: false, lastState: null,
@@ -729,12 +704,14 @@ class WalletManager {
       }
     }
 
-    // No (usable) cache: do NOT cold-sync — the facade would accumulate the
-    // whole dust ledger in RAM (OOM). Build the cache out-of-process instead;
-    // housekeep() activates the wallet once the cache file is written.
-    this.spawnDustBootstrap(managed.info.seed);
-    managed.status = 'bootstrapping';
-    throw new Error('Wallet has no state cache yet — dust bootstrap started (one-time); please retry later.');
+    // No (usable) cache: fresh start. Dust begins at the ledger-9 fork
+    // (skipLedgerV8DustHistory), so this no longer needs the out-of-process
+    // ledger-v8 dust bootstrap.
+    const ctx = await this.createWalletContext(managed.info.seed, null);
+    managed.ctx = ctx;
+    managed.status = 'active';
+    managed.reconnectAttempts = 0;
+    this.subscribe(managed);
   }
 
   private async disconnect(seed: string, removeFromMap = true) {
@@ -799,9 +776,9 @@ class WalletManager {
         } catch (e: any) {
           console.warn(`[WalletManager] activation after bootstrap failed for ${seed.substring(0, 12)}...: ${e?.message}`);
         }
-      } else if (!this.bootstrapping.has(seed)) {
-        // Process restarted mid-bootstrap and cache not yet written → re-kick.
-        this.spawnDustBootstrap(seed);
+      } else {
+        // Leftover from the ledger-v8 era bootstrap: start it fresh instead.
+        managed.status = 'suspended';
       }
     }
   }
@@ -902,15 +879,28 @@ class WalletManager {
 
     const keys = deriveKeysFromSeed(seed);
     const networkId = getNetworkId();
+    // SDK 2.x wallets span the ledger-8 → ledger-9 fork: each ledger version
+    // derives its own keys from these seeds (same tree positions as `keys`, so
+    // all addresses stay the same).
+    const seeds = WalletSeeds.fromMasterSeed(Buffer.from(seed, 'hex'));
     const shieldedSecretKeys = ledger.ZswapSecretKeys.fromSeed(keys[Roles.Zswap]);
     const dustSecretKey = ledger.DustSecretKey.fromSeed(keys[Roles.Dust]);
-    const unshieldedKeystore = createKeystore(keys[Roles.NightExternal], networkId);
+    const unshieldedKeystore = createKeystore({ kind: 'schnorr', secret: keys[Roles.NightExternal] }, networkId);
 
     const walletConfig = {
       networkId,
       indexerClientConnection: { indexerHttpUrl: cfg.indexerHttp, indexerWsUrl: cfg.indexerWs },
       provingServerUrl: new URL(cfg.proofServer),
       relayURL: new URL(cfg.nodeRpc.replace(/^http/, 'ws')),
+      costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 },
+      txHistoryStorage: new NoOpTransactionHistoryStorage(),
+      // A fresh dust wallet starts at the ledger-9 fork with the dust the chain
+      // re-emitted there, instead of replaying ~1.8M ledger-8 dust events.
+      // Restores are unaffected (they resume from their snapshot's cursor).
+      // We supply the fork point ourselves (cached, see dust-fork-start.ts):
+      // the SDK's own search (skipLedgerV8DustHistory) times out on Blockfrost
+      // and then silently replays the whole ledger-8 dust history.
+      dustTimelineStartProbe,
     };
 
     // Try to restore from cached state (much faster — only delta sync)
@@ -937,14 +927,14 @@ class WalletManager {
     const buildFacade = (useCache: boolean) => (WalletFacade as any).init({
       configuration: walletConfig,
       shielded: (config: any) => useCache && useShielded
-        ? ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.shielded)
-        : ShieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSecretKeys(shieldedSecretKeys),
+        ? ShieldedWallet(config).restore(cached!.shielded)
+        : ShieldedWallet(config).startWithSeed(seeds.shielded),
       unshielded: (config: any) => useCache && useUnshielded
-        ? UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.unshielded)
-        : UnshieldedWallet({ ...config, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
+        ? UnshieldedWallet(config).restore(cached!.unshielded)
+        : UnshieldedWallet(config).startWithPublicKey(PublicKey.fromKeyStore(unshieldedKeystore)),
       dust: (config: any) => useCache && useDust
-        ? DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).restore(cached!.dust)
-        : DustWallet({ ...config, costParameters: { additionalFeeOverhead: 300_000_000_000_000n, feeBlocksMargin: 5 }, txHistoryStorage: new NoOpTransactionHistoryStorage() }).startWithSeed(keys[Roles.Dust], ledger.LedgerParameters.initialParameters().dust),
+        ? DustWallet(config).restore(cached!.dust)
+        : DustWallet(config).startWithSeed(seeds.dust),
     });
 
     let facade: WalletFacade;
@@ -964,8 +954,8 @@ class WalletManager {
       }
     }
 
-    await facade.start(shieldedSecretKeys, dustSecretKey);
-    return { facade, shieldedSecretKeys, dustSecretKey, unshieldedKeystore };
+    await facade.start(seeds);
+    return { facade, shieldedSecretKeys, dustSecretKey, unshieldedKeystore, seeds };
   }
 
   // ---- Persistence ----

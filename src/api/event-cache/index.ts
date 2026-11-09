@@ -4,7 +4,7 @@
 
 export { eventCacheSubscriber } from './subscriber.js';
 export { DB_CONFIG, pingDb, applySchema, closeDb, getPool } from './db.js';
-export { fastSyncShielded, fastSyncDust } from './fast-sync.js';
+// fast-sync.ts (ledger-8 MySQL replay) is no longer exported — obsolete since the ledger-9 fork.
 
 import { eventCacheSubscriber } from './subscriber.js';
 import { pingDb, applySchema, DB_CONFIG } from './db.js';

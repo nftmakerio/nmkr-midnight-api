@@ -40,12 +40,18 @@ import {
   burnNft,
 } from './midnight-service.js';
 import { ACTIVE_NETWORK, PUBLIC_API_URL, PORT, checkIndexerAndFallback, USING_CUSTOM_INDEXER } from './networks.js';
-import { initEventCache, eventCacheSubscriber, fastSyncShielded, fastSyncDust } from './event-cache/index.js';
+import { initEventCache, eventCacheSubscriber } from './event-cache/index.js';
 import { walletManager, addressWatcher } from './wallet-manager.js';
+import { warmDustForkStart } from './dust-fork-start.js';
 import { installConsoleCapture, requestLogMiddleware, sendError } from './request-log.js';
 import { accessLogMiddleware, ACCESS_LOG_ENABLED } from './access-log.js';
-import { bootstrapDustCache } from './dust-bootstrap.js';
-import { bootstrapShieldedCache } from './shielded-bootstrap.js';
+
+// Ledger-8 era replay tools (dust/shielded bootstrap, MySQL fast-sync) are
+// obsolete since the ledger-9 fork: wallet-sdk 2.x starts dust at the fork and
+// replays across the boundary itself. Their endpoints answer 410 Gone.
+const LEDGER8_TOOL_GONE = {
+  error: 'Removed with the ledger-9 upgrade: wallets now start dust at the ledger-9 fork, so this ledger-8 replay tool is no longer needed.',
+};
 
 // Capture all console.* output per-request (incl. deep SDK errors) so it can
 // be returned in the response `debug` field. Must run before anything logs.
@@ -689,7 +695,7 @@ app.post('/api/wallet/bootstrap-dust', async (req, res) => {
     const seed = req.body?.seed;
     const seedErr = validateSeed(seed, 'seed');
     if (seedErr) return res.status(400).json({ error: seedErr });
-    res.json(await bootstrapDustCache(seed, (m) => console.log(`[DustBootstrap] ${m}`)));
+    res.status(410).json(LEDGER8_TOOL_GONE);
   } catch (err: any) { sendError(res, err, 500); }
 });
 
@@ -701,7 +707,7 @@ app.post('/api/wallet/bootstrap-shielded', async (req, res) => {
     const seed = req.body?.seed;
     const seedErr = validateSeed(seed, 'seed');
     if (seedErr) return res.status(400).json({ error: seedErr });
-    res.json(await bootstrapShieldedCache(seed, (m) => console.log(`[ShieldedBootstrap] ${m}`)));
+    res.status(410).json(LEDGER8_TOOL_GONE);
   } catch (err: any) { sendError(res, err, 500); }
 });
 
@@ -1088,10 +1094,8 @@ app.post('/api/sync-fast', async (req, res) => {
     const { seed, fromIndex, includeState } = req.body;
     const seedErr = validateSeed(seed, 'seed');
     if (seedErr) return res.status(400).json({ error: seedErr });
-    res.json(await fastSyncShielded(seed, {
-      fromIndex: Number(fromIndex) || 0,
-      includeState: !!includeState,
-    }));
+    void fromIndex; void includeState;
+    res.status(410).json(LEDGER8_TOOL_GONE);
   } catch (err: any) { sendError(res, err, 500); }
 });
 
@@ -1100,7 +1104,8 @@ app.post('/api/sync-fast/dust', async (req, res) => {
     const { seed, fromIndex } = req.body;
     const seedErr = validateSeed(seed, 'seed');
     if (seedErr) return res.status(400).json({ error: seedErr });
-    res.json(await fastSyncDust(seed, { fromIndex: Number(fromIndex) || 0 }));
+    void fromIndex;
+    res.status(410).json(LEDGER8_TOOL_GONE);
   } catch (err: any) { sendError(res, err, 500); }
 });
 
@@ -1116,7 +1121,10 @@ initEventCache().catch(err => console.warn(`[EventCache] init error: ${err.messa
 // had synced sequentially (~1 min each) -> every restart meant minutes of 502s.
 // Watched wallets are registered as placeholders first, so requests for them
 // resume on demand (no duplicate contexts) while initialize() is still running.
-checkIndexerAndFallback().then(() => {
+checkIndexerAndFallback().then(async () => {
+  // Fill the ledger-9 dust fork-point cache before any wallet starts fresh
+  // (see dust-fork-start.ts). Cached after the first run; best-effort.
+  await warmDustForkStart().catch(() => null);
   walletManager.initialize().catch((err: any) =>
     console.error('[WalletManager] background initialize failed:', err?.message || err));
 }).then(() => {
