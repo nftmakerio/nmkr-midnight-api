@@ -2088,6 +2088,18 @@ async function resolveDustCtx(dustSeed?: string, ownerSeed?: string): Promise<{ 
 // Additive & isolated: deploys the nmkr-mts contract and mints one
 // native-token NFT. Does NOT touch the existing nmkr-nft flow.
 // ===================================================================
+// The nmkr-mts contract as the ledger-8 toolchain built it (compact-runtime 0.16,
+// imported as 'compact-runtime-ledger8'), with providers serving its artifacts.
+async function legacyMtsContract(providers: any, cfg: NetworkConfig) {
+  const dir = path.resolve(CONTRACT_PATH, '../../managed-ledger8/nmkr-mts');
+  const mod = await import(pathToFileURL(path.join(dir, 'contract', 'index.js')).href);
+  const zk = new NodeZkConfigProvider(dir);
+  return {
+    contract: new mod.Contract({}),
+    providers: { ...providers, zkConfigProvider: zk, proofProvider: httpClientProofProvider(cfg.proofServer, zk as any) },
+  };
+}
+
 export async function deployAndMintMts(params: {
   seed: string;
   dustSeed?: string;
@@ -2161,13 +2173,23 @@ export async function deployAndMintMts(params: {
     let contractAddress: string;
     let deployTxHash: string | undefined = undefined;
     const newCollection = !params.contractAddress;
+    // A collection deployed before the Ledger 9 fork keeps the verifier keys of
+    // the old toolchain: call it through Midnight.js' retained-era (keep-state)
+    // pipeline with the original ledger-8 artifacts instead.
+    let legacy: { contract: any; providers: any } | null = null;
     if (params.contractAddress) {
-      await findDeployedContract(providers as any, {
-        compiledContract,
-        contractAddress: params.contractAddress,
-        privateStateId: 'mtsPrivateState',
-        initialPrivateState: {},
-      } as any);
+      try {
+        await findDeployedContract(providers as any, {
+          compiledContract,
+          contractAddress: params.contractAddress,
+          privateStateId: 'mtsPrivateState',
+          initialPrivateState: {},
+        } as any);
+      } catch (err: any) {
+        if (!/verifier key differs/i.test(String(err?.message))) throw err;
+        legacy = await legacyMtsContract(providers, cfg);
+        console.log(`[MTS] ${params.contractAddress.substring(0, 12)}... is a pre-fork collection -> retained-era call`);
+      }
       contractAddress = params.contractAddress;
     } else {
       const deployed = await deployContract(providers, {
@@ -2200,14 +2222,20 @@ export async function deployAndMintMts(params: {
 
     // Use the low-level call path so we can pass additionalCoinEncPublicKeyMappings
     // (the deployed.callTx.* convenience hardcodes it to undefined).
+    const mintArgs = [tokenId, mintTo, nonce, nameB, symbolB, descB, imageB, mediaB];
     const mintResult = await withRetry(ctx, () => {
+      if (legacy) {
+        const legacyOptions = (createCallTxOptions as any)(
+          legacy.contract, 'mint', contractAddress, undefined, encMappings, mintArgs);
+        return (submitCallTx as any)(legacy.providers, legacyOptions);
+      }
       const callOptions = createCallTxOptions(
         compiledContract,
         'mint' as any,
         contractAddress,
         'mtsPrivateState',
         encMappings as any,
-        [tokenId, mintTo, nonce, nameB, symbolB, descB, imageB, mediaB] as any,
+        mintArgs as any,
       );
       return submitCallTx(providers as any, callOptions as any);
     });
