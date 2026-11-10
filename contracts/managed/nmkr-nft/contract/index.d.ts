@@ -8,99 +8,99 @@ export type Witnesses<PS> = {
 }
 
 export type ImpureCircuits<PS> = {
-  name(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  symbol(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  ownerOf(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
-  tokenURI(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  tokenName(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  tokenImage(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  tokenMediaType(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  getApproved(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
+  name(context: __compactRuntime.CircuitContext<PS>): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  symbol(context: __compactRuntime.CircuitContext<PS>): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  ownerOf(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>>;
+  tokenURI(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  tokenName(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  tokenImage(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  tokenMediaType(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  totalSupply(context: __compactRuntime.CircuitContext<PS>): Promise<__compactRuntime.CircuitResults<PS, bigint>>;
+  getApproved(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>>;
   mint(context: __compactRuntime.CircuitContext<PS>,
        to_0: ZswapCoinPublicKey,
        uri_0: string,
        tokenName_0: string,
        image_0: string,
-       mediaType_0: string): __compactRuntime.CircuitResults<PS, bigint>;
+       mediaType_0: string): Promise<__compactRuntime.CircuitResults<PS, bigint>>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            to_0: ZswapCoinPublicKey,
-           tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
+           tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, []>>;
   approve(context: __compactRuntime.CircuitContext<PS>,
           to_0: ZswapCoinPublicKey,
-          tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
+          tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, []>>;
   setApprovalForAll(context: __compactRuntime.CircuitContext<PS>,
                     operator_0: ZswapCoinPublicKey,
-                    approved_0: boolean): __compactRuntime.CircuitResults<PS, []>;
+                    approved_0: boolean): Promise<__compactRuntime.CircuitResults<PS, []>>;
   isApprovedForAll(context: __compactRuntime.CircuitContext<PS>,
                    owner_0: ZswapCoinPublicKey,
-                   operator_0: ZswapCoinPublicKey): __compactRuntime.CircuitResults<PS, boolean>;
-  burn(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
+                   operator_0: ZswapCoinPublicKey): Promise<__compactRuntime.CircuitResults<PS, boolean>>;
+  burn(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, []>>;
 }
 
 export type ProvableCircuits<PS> = {
-  name(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  symbol(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  ownerOf(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
-  tokenURI(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  tokenName(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  tokenImage(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  tokenMediaType(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  getApproved(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
+  name(context: __compactRuntime.CircuitContext<PS>): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  symbol(context: __compactRuntime.CircuitContext<PS>): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  ownerOf(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>>;
+  tokenURI(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  tokenName(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  tokenImage(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  tokenMediaType(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  totalSupply(context: __compactRuntime.CircuitContext<PS>): Promise<__compactRuntime.CircuitResults<PS, bigint>>;
+  getApproved(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>>;
   mint(context: __compactRuntime.CircuitContext<PS>,
        to_0: ZswapCoinPublicKey,
        uri_0: string,
        tokenName_0: string,
        image_0: string,
-       mediaType_0: string): __compactRuntime.CircuitResults<PS, bigint>;
+       mediaType_0: string): Promise<__compactRuntime.CircuitResults<PS, bigint>>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            to_0: ZswapCoinPublicKey,
-           tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
+           tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, []>>;
   approve(context: __compactRuntime.CircuitContext<PS>,
           to_0: ZswapCoinPublicKey,
-          tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
+          tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, []>>;
   setApprovalForAll(context: __compactRuntime.CircuitContext<PS>,
                     operator_0: ZswapCoinPublicKey,
-                    approved_0: boolean): __compactRuntime.CircuitResults<PS, []>;
+                    approved_0: boolean): Promise<__compactRuntime.CircuitResults<PS, []>>;
   isApprovedForAll(context: __compactRuntime.CircuitContext<PS>,
                    owner_0: ZswapCoinPublicKey,
-                   operator_0: ZswapCoinPublicKey): __compactRuntime.CircuitResults<PS, boolean>;
-  burn(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
+                   operator_0: ZswapCoinPublicKey): Promise<__compactRuntime.CircuitResults<PS, boolean>>;
+  burn(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, []>>;
 }
 
 export type PureCircuits = {
 }
 
 export type Circuits<PS> = {
-  name(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  symbol(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, string>;
-  ownerOf(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
-  tokenURI(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  tokenName(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  tokenImage(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  tokenMediaType(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, string>;
-  totalSupply(context: __compactRuntime.CircuitContext<PS>): __compactRuntime.CircuitResults<PS, bigint>;
-  getApproved(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>;
+  name(context: __compactRuntime.CircuitContext<PS>): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  symbol(context: __compactRuntime.CircuitContext<PS>): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  ownerOf(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>>;
+  tokenURI(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  tokenName(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  tokenImage(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  tokenMediaType(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, string>>;
+  totalSupply(context: __compactRuntime.CircuitContext<PS>): Promise<__compactRuntime.CircuitResults<PS, bigint>>;
+  getApproved(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, ZswapCoinPublicKey>>;
   mint(context: __compactRuntime.CircuitContext<PS>,
        to_0: ZswapCoinPublicKey,
        uri_0: string,
        tokenName_0: string,
        image_0: string,
-       mediaType_0: string): __compactRuntime.CircuitResults<PS, bigint>;
+       mediaType_0: string): Promise<__compactRuntime.CircuitResults<PS, bigint>>;
   transfer(context: __compactRuntime.CircuitContext<PS>,
            to_0: ZswapCoinPublicKey,
-           tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
+           tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, []>>;
   approve(context: __compactRuntime.CircuitContext<PS>,
           to_0: ZswapCoinPublicKey,
-          tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
+          tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, []>>;
   setApprovalForAll(context: __compactRuntime.CircuitContext<PS>,
                     operator_0: ZswapCoinPublicKey,
-                    approved_0: boolean): __compactRuntime.CircuitResults<PS, []>;
+                    approved_0: boolean): Promise<__compactRuntime.CircuitResults<PS, []>>;
   isApprovedForAll(context: __compactRuntime.CircuitContext<PS>,
                    owner_0: ZswapCoinPublicKey,
-                   operator_0: ZswapCoinPublicKey): __compactRuntime.CircuitResults<PS, boolean>;
-  burn(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): __compactRuntime.CircuitResults<PS, []>;
+                   operator_0: ZswapCoinPublicKey): Promise<__compactRuntime.CircuitResults<PS, boolean>>;
+  burn(context: __compactRuntime.CircuitContext<PS>, tokenId_0: bigint): Promise<__compactRuntime.CircuitResults<PS, []>>;
 }
 
 export type Ledger = {
@@ -173,10 +173,6 @@ export type Ledger = {
   };
 }
 
-export type ContractReferenceLocations = any;
-
-export declare const contractReferenceLocations : ContractReferenceLocations;
-
 export declare class Contract<PS = any, W extends Witnesses<PS> = Witnesses<PS>> {
   witnesses: W;
   circuits: Circuits<PS>;
@@ -189,8 +185,11 @@ export declare class Contract<PS = any, W extends Witnesses<PS> = Witnesses<PS>>
                _owner_0: ZswapCoinPublicKey,
                _transferable_0: boolean,
                _image_0: string,
-               _mediaType_0: string): __compactRuntime.ConstructorResult<PS>;
+               _mediaType_0: string): Promise<__compactRuntime.ConstructorResult<PS>>;
 }
 
 export declare function ledger(state: __compactRuntime.StateValue | __compactRuntime.ChargedState): Ledger;
 export declare const pureCircuits: PureCircuits;
+export declare const expectedVk: Record<string, string>;
+export declare const circuitSignatures: __compactRuntime.CircuitSignatures;
+export declare const declaredInterfaces: __compactRuntime.DeclaredInterfaces;

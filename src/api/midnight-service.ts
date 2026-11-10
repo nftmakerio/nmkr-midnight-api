@@ -30,6 +30,7 @@ import { indexerPublicDataProvider } from '@midnight-ntwrk/midnight-js-indexer-p
 import { NodeZkConfigProvider } from '@midnight-ntwrk/midnight-js-node-zk-config-provider';
 import { levelPrivateStateProvider } from '@midnight-ntwrk/midnight-js-level-private-state-provider';
 import { CompiledContract } from '@midnight-ntwrk/compact-js';
+import { ContractState as RuntimeContractState } from '@midnight-ntwrk/compact-runtime';
 import * as Rx from 'rxjs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -384,6 +385,28 @@ export interface NightRecipient {
   amount: string | number | bigint;  // raw units (1 NIGHT = 1_000_000 raw)
 }
 
+// Build, pay, sign, prove and submit a wallet-level transfer (facade 5). With a
+// separate dust payer the sender builds without fees and the payer adds the
+// dust spend; the payer's booking is reverted when the tx does not make it.
+async function submitTransfer(sender: WalletContext, dustCtx: WalletContext | null, outputs: any[]): Promise<string> {
+  const ttl = new Date(Date.now() + TX_TTL_SECONDS * 1000);
+  let recipe: any = await (sender.facade as any).transferTransaction(outputs, { ttl, payFees: !dustCtx });
+  let dustTx: any = null;
+  try {
+    if (dustCtx) {
+      ({ transaction: dustTx } = await (dustCtx.facade as any).dust.balanceTransactions([recipe.transaction], ttl));
+      recipe = { ...recipe, transaction: await (sender.facade as any).mergeUnprovenTransactions(recipe.transaction, dustTx) };
+    }
+    const signed = await (sender.facade as any).signRecipe(recipe, (d: Uint8Array) => sender.unshieldedKeystore.signDataAsync(d));
+    const finalized = await (sender.facade as any).finalizeRecipe(signed);
+    return await sender.facade.submitTransaction(finalized) as any;
+  } catch (err: any) {
+    try { await (sender.facade as any).revert(recipe, 'transfer failed'); } catch {}
+    if (dustCtx && dustTx) { try { await (dustCtx.facade as any).revertTransaction(dustTx, 'transfer failed'); } catch {} }
+    throw err;
+  }
+}
+
 export async function transferNight(params: {
   senderSeed: string;
   recipients: NightRecipient[];
@@ -421,18 +444,7 @@ export async function transferNight(params: {
       outputs,
     }];
 
-    const txHash = await withRetry(sender, async () => {
-      const ttl = new Date(Date.now() + 30 * 60 * 1000);
-      const recipe = await (sender.facade as any).transferTransaction(
-        tokenTransfer,
-        { shieldedSecretKeys: sender.shieldedSecretKeys, dustSecretKey },
-        { ttl },
-      );
-      const signFn = (payload: Uint8Array) => sender.unshieldedKeystore.signData(payload);
-      const signedRecipe = await (sender.facade as any).signRecipe(recipe, signFn);
-      const finalizedTx = await sender.facade.finalizeTransaction(signedRecipe.transaction);
-      return sender.facade.submitTransaction(finalizedTx);
-    });
+    const txHash = await withRetry(sender, () => submitTransfer(sender, dustCtx, tokenTransfer));
 
     const recipientsOut = params.recipients.map(r => ({
       toAddress: r.toAddress,
@@ -500,11 +512,19 @@ export async function registerDust(seedOrAddress: string) {
     }
 
     const txHash = await withRetry(ctx, async () => {
-      const recipe = await (ctx.facade as any).registerNightUtxosForDustGeneration(
+      const register = () => (ctx.facade as any).registerNightUtxosForDustGeneration(
         unregistered,
         ctx.unshieldedKeystore.getPublicKey(),
-        (payload: Uint8Array) => ctx.unshieldedKeystore.signData(payload),
+        (payload: Uint8Array) => ctx.unshieldedKeystore.signDataAsync(payload),
       );
+      // A first registration pays its fee from the dust its NIGHT has generated
+      // so far; when that is still short but reachable, wait for it and retry.
+      const recipe = await register().catch(async (error: any) => {
+        if (error?._tag !== 'Wallet.InsufficientDustForFee' || error?.estimate?._tag !== 'Reachable') throw error;
+        const timeoutMs = Math.min(Number(error.estimate.seconds) * 1000 + 60_000, 10 * 60_000);
+        await (ctx.facade as any).waitForGeneratedDust(unregistered, error.fee, { timeoutMs });
+        return register();
+      });
       const finalized = await (ctx.facade as any).finalizeRecipe(recipe);
       return ctx.facade.submitTransaction(finalized);
     });
@@ -655,6 +675,19 @@ export async function deployAndMintNft(params: {
   }
 }
 
+// Midnight.js 5 returns contract state as era-tagged bytes. Decode it with the
+// runtime the contract module was compiled against (0.21 = ledger 9) so the
+// module's ledger() accepts it. A state the v8 ledger wrote (a collection not
+// touched since the fork) is refused here with a clear message.
+function contractStateData(read: any): any {
+  const serialized = read?.contractState;
+  if (!serialized) throw new Error('Contract not found');
+  if (serialized.era !== 'v9') {
+    throw new Error(`Contract state was written by the ledger-${serialized.era} era (deployed before the Ledger 9 fork); not supported yet`);
+  }
+  return serialized.deserialize({ v9: RuntimeContractState }).data;
+}
+
 export async function queryNftContract(contractAddress: string) {
   const cfg = activeNetwork();
 
@@ -665,7 +698,7 @@ export async function queryNftContract(contractAddress: string) {
   const contractState = await provider.queryContractState(contractAddress);
   if (!contractState) throw new Error('Contract not found');
 
-  const state = ledgerParser(contractState.data);
+  const state = ledgerParser(contractStateData(contractState));
   const tokens: any[] = [];
   for (const [tokenId, owner] of state.owners) {
     let uri = '';
@@ -2190,7 +2223,7 @@ export async function deployAndMintMts(params: {
     if (params.contractAddress) {
       try {
         const cs = await providers.publicDataProvider.queryContractState(params.contractAddress);
-        if (cs) collectionOut = (contractModule.ledger(cs.data).collectionName as string) || collectionName;
+        if (cs) collectionOut = (contractModule.ledger(contractStateData(cs)).collectionName as string) || collectionName;
       } catch { /* keep passed/default name */ }
     }
 
@@ -2251,18 +2284,7 @@ export async function transferMtsNft(params: {
       outputs: [{ type: params.tokenType.toLowerCase(), amount, receiverAddress }],
     }];
 
-    const txHash = await withRetry(sender, async () => {
-      const ttl = new Date(Date.now() + 30 * 60 * 1000);
-      const recipe = await (sender.facade as any).transferTransaction(
-        tokenTransfer,
-        { shieldedSecretKeys: sender.shieldedSecretKeys, dustSecretKey },
-        { ttl },
-      );
-      const signFn = (payload: Uint8Array) => sender.unshieldedKeystore.signData(payload);
-      const signedRecipe = await (sender.facade as any).signRecipe(recipe, signFn);
-      const finalizedTx = await sender.facade.finalizeTransaction(signedRecipe.transaction);
-      return sender.facade.submitTransaction(finalizedTx);
-    });
+    const txHash = await withRetry(sender, () => submitTransfer(sender, dustCtx, tokenTransfer));
 
     return {
       txHash,
