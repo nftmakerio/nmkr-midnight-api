@@ -2093,7 +2093,8 @@ async function resolveDustCtx(dustSeed?: string, ownerSeed?: string): Promise<{ 
 async function legacyMtsContract(providers: any, cfg: NetworkConfig) {
   const dir = path.resolve(CONTRACT_PATH, '../../managed-ledger8/nmkr-mts');
   const mod = await import(pathToFileURL(path.join(dir, 'contract', 'index.js')).href);
-  const zk = new NodeZkConfigProvider(dir);
+  // The ledger-8 toolchain emitted no integrity manifest; these artifacts ship in this repo.
+  const zk = new NodeZkConfigProvider(dir, { verify: 'require-if-present' } as any);
   return {
     contract: new mod.Contract({}),
     providers: { ...providers, zkConfigProvider: zk, proofProvider: httpClientProofProvider(cfg.proofServer, zk as any) },
