@@ -63,3 +63,4 @@ access-*.log
 
 # Ledger-9 dust fork point, cached per network at runtime
 dust-fork-start.*.json
+mints-done.*.json

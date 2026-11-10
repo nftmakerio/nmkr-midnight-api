@@ -8,6 +8,9 @@
 // =============================================================
 
 import express from 'express';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import cors from 'cors';
 import swaggerJsdoc from 'swagger-jsdoc';
 import swaggerUi from 'swagger-ui-express';
@@ -799,6 +802,8 @@ app.post('/api/nft/create-collection', async (req, res) => {
   }
 });
 
+const MINT_DONE_FILE = path.resolve(process.cwd(), `mints-done.${ACTIVE_NETWORK.networkId}.json`);
+const mintDedupe = new Map<string, { promise: Promise<any>; at: number }>();
 app.post('/api/nft/mint', async (req, res) => {
   try {
     const {
@@ -815,12 +820,42 @@ app.post('/api/nft/mint', async (req, res) => {
     // collection is deployed (returns contractAddress + ownerSeed); with it, the NFT is
     // minted into that existing collection. Recipient = toShieldedAddress (a
     // mn_shield-addr_...; its encryption key is needed). No recipient => mint to owner.
-    res.json(await deployAndMintMts({
+    // Idempotency: a caller that times out and resends the SAME mint must not
+    // mint a second token. Identical requests join the call in flight, or get
+    // its result if it succeeded within the last 30 minutes.
+    // One NFT = collection + name + metadata uri (+ image).
+    const key = createHash('sha256').update(JSON.stringify([contractAddress || `new:${collection || ''}`,
+      name, req.body.uri || null, image || null])).digest('hex');
+    // Mints already submitted (survives restarts): refuse to mint them again.
+    try {
+      const done = JSON.parse(fs.readFileSync(MINT_DONE_FILE, 'utf-8'));
+      if (done[key]) {
+        console.log(`[MintDedupe] ${name}: already submitted at ${done[key].at} -> refusing duplicate`);
+        return res.status(409).json({ error: `This exact mint was already submitted (${done[key].at}); not minting a duplicate.`, alreadyMinted: true, ...done[key] });
+      }
+    } catch {}
+    const prev = mintDedupe.get(key);
+    if (prev && Date.now() - prev.at < 30 * 60_000) {
+      console.log(`[MintDedupe] identical mint request (${name}) -> joining previous call`);
+      return res.json(await prev.promise);
+    }
+    const promise = deployAndMintMts({
       seed: ownerSeed, dustSeed,
       collection, name, symbol, description, image, mediaType,
       toShieldedAddress,
       contractAddress,  // if given -> mint into this existing collection
-    }));
+    });
+    mintDedupe.set(key, { promise, at: Date.now() });
+    promise.catch(() => mintDedupe.delete(key));   // a failed mint may be retried
+    for (const [k, v] of mintDedupe) if (Date.now() - v.at > 30 * 60_000) mintDedupe.delete(k);
+    const result = await promise;
+    try {
+      let done: any = {};
+      try { done = JSON.parse(fs.readFileSync(MINT_DONE_FILE, 'utf-8')); } catch {}
+      done[key] = { at: new Date().toISOString(), txHash: result?.txHash, tokenId: result?.tokenId, contractAddress: result?.contractAddress, name };
+      fs.writeFileSync(MINT_DONE_FILE, JSON.stringify(done, null, 1));
+    } catch {}
+    res.json(result);
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
     sendError(res, err, status);
