@@ -1,0 +1,3 @@
+server_names_hash_bucket_size 128;
+log_format nmkr_timing '$remote_addr [$time_local] "$request" $status host=$host up=$upstream_addr up_status=$upstream_status rt=$request_time urt=$upstream_response_time len=$content_length';
+access_log /var/log/nginx/timing.log nmkr_timing;
