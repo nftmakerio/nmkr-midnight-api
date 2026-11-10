@@ -2005,7 +2005,7 @@ async function balanceSignFinalize(
   return (ctx.facade as any).finalizeRecipe(signed);
 }
 
-async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext) {
+async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext, trace: (s: string) => void = () => {}) {
   // We only need the owner's identity keys (coinPublicKey / encryptionPublicKey)
   // here — those are available immediately. Do NOT wait for a full `isSynced`
   // state: that hangs when the owner wallet isn't fully synced, and balancing
@@ -2039,12 +2039,14 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext)
     getCoinPublicKey: () => state.shielded.coinPublicKey.toHexString(),
     getEncryptionPublicKey: () => state.shielded.encryptionPublicKey.toHexString(),
     async balanceTx(tx: any, ttl?: Date) {
+      trace('contract proof done; balancing + fee proofs...');
       await revertPendingDust('re-balance');
       const active = await activeProtocolVersion(ctx);
       const unbound = WalletTransaction.adopt('Unbound', tx.deserialize({ v9: ledger.Transaction }), active);
       const expiry = ttl ?? new Date(Date.now() + 30 * 60 * 1000);
       try {
         const finalized = await balanceSignFinalize(ctx, dustCtx, unbound, expiry, (d) => { pendingDustTx = d; });
+        trace('balanced + proved');
         return unwrapFinalizedV9(finalized, active);
       } catch (err: any) {
         await revertPendingDust(`balance/prove failed: ${String(err?.message || err).slice(0, 80)}`);
@@ -2057,7 +2059,9 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext)
     const active = await activeProtocolVersion(ctx);
     const finalized = WalletTransaction.adopt('Finalized', tx.deserialize({ v9: ledger.Transaction }), active);
     try {
+      trace('submitting...');
       const res = await ctx.facade.submitTransaction(finalized as any);
+      trace('submitted');
       pendingDustTx = null;   // accepted — the dust is really spent
       return res as any;
     } catch (err: any) {
@@ -2072,6 +2076,13 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext)
     walletProvider,
     midnightProvider,
   };
+}
+
+// Step timing for the long write flows, so a hang shows where it sits.
+function tracer(name: string) {
+  const id = Math.random().toString(36).slice(2, 7);
+  const t0 = Date.now();
+  return (step: string) => console.log(`[trace ${name} ${id}] +${((Date.now() - t0) / 1000).toFixed(1)}s ${step}`);
 }
 
 // Helper: resolve optional dustSeed to a WalletContext
@@ -2130,8 +2141,12 @@ export async function deployAndMintMts(params: {
     CompiledContract.withCompiledFileAssets(path.join(MTS_PATH, 'keys')),
   );
 
+  const trace = tracer('mint');
+  trace('owner wallet...');
   const { ctx, cached } = await getWalletCtxFast(params.seed);
+  trace(`owner wallet ready (cached=${cached}); dust wallet...`);
   const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.seed);
+  trace(`dust wallet ready (${dustCtx ? `separate, cached=${dustCached}` : 'owner pays'})`);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
@@ -2148,7 +2163,8 @@ export async function deployAndMintMts(params: {
       encMappings = new Map([[r.coinPublicKey, r.encryptionPublicKey]]);
     }
 
-    const bridge = await createProviderBridge(ctx, dustCtx);
+    const bridge = await createProviderBridge(ctx, dustCtx, trace);
+    trace('provider bridge ready');
     const zkConfigProvider = new NodeZkConfigProvider(MTS_PATH);
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
@@ -2193,6 +2209,7 @@ export async function deployAndMintMts(params: {
       }
       contractAddress = params.contractAddress;
     } else {
+      trace('deploying collection (proving)...');
       const deployed = await deployContract(providers, {
         compiledContract,
         privateStateId: 'mtsPrivateState',
@@ -2224,6 +2241,7 @@ export async function deployAndMintMts(params: {
     // Use the low-level call path so we can pass additionalCoinEncPublicKeyMappings
     // (the deployed.callTx.* convenience hardcodes it to undefined).
     const mintArgs = [tokenId, mintTo, nonce, nameB, symbolB, descB, imageB, mediaB];
+    trace(`minting (${legacy ? 'pre-fork collection' : 'collection'} ${contractAddress.substring(0, 12)}..., proving)...`);
     const mintResult = await withRetry(ctx, () => {
       if (legacy) {
         const legacyOptions = (createCallTxOptions as any)(
@@ -2347,14 +2365,19 @@ export async function deployMtsCollection(params: {
     CompiledContract.withCompiledFileAssets(path.join(MTS_PATH, 'keys')),
   );
 
+  const trace = tracer('collection');
+  trace('owner wallet...');
   const { ctx, cached } = await getWalletCtxFast(params.seed);
+  trace(`owner wallet ready (cached=${cached}); dust wallet...`);
   const { dustCtx, dustCached } = await resolveDustCtx(params.dustSeed, params.seed);
+  trace(`dust wallet ready (${dustCtx ? `separate, cached=${dustCached}` : 'owner pays'})`);
   try {
     const state: any = await Rx.firstValueFrom(ctx.facade.state());
     const coinPublicKey = state.shielded.coinPublicKey.toHexString();
     const ownerPubKey = { bytes: Buffer.from(coinPublicKey, 'hex') };
 
-    const bridge = await createProviderBridge(ctx, dustCtx);
+    const bridge = await createProviderBridge(ctx, dustCtx, trace);
+    trace('provider bridge ready');
     const zkConfigProvider = new NodeZkConfigProvider(MTS_PATH);
     const providers = {
       privateStateProvider: levelPrivateStateProvider({
@@ -2370,6 +2393,7 @@ export async function deployMtsCollection(params: {
       config: { networkId: ACTIVE_NETWORK.networkId, ttlSeconds: TX_TTL_SECONDS },
     };
 
+    trace('deploying collection (proving)...');
     const deployed = await withRetry(ctx, () => deployContract(providers, {
       compiledContract,
       privateStateId: 'mtsPrivateState',

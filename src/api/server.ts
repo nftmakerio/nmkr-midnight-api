@@ -129,10 +129,19 @@ app.use((req, res, next) => {
     : '';
   const ip = req.ip || req.socket.remoteAddress || '-';
 
+  // Long-running write calls: log the start too, and log a call the client
+  // abandoned (no 'finish' then), so a hang is visible while it happens.
+  const tracked = req.method === 'POST' && /^\/api\/(nft|wallet\/(transfer|send|register))/.test(req.path);
+  if (tracked) console.log(`[${new Date().toISOString()}] ${ip} ${req.method} ${req.path} START${bodyPreview}`);
+  let finished = false;
   res.on('finish', () => {
+    finished = true;
     const duration = Date.now() - start;
     const ts = new Date().toISOString();
     console.log(`[${ts}] ${ip} ${req.method} ${req.path} -> ${res.statusCode} (${duration}ms)${bodyPreview}${queryPreview}`);
+  });
+  res.on('close', () => {
+    if (!finished) console.log(`[${new Date().toISOString()}] ${ip} ${req.method} ${req.path} CLIENT ABORTED after ${Date.now() - start}ms (call keeps running)${bodyPreview}`);
   });
 
   next();
