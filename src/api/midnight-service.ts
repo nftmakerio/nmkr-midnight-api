@@ -38,6 +38,7 @@ import * as bip39 from 'bip39';
 import * as CSL from '@emurgo/cardano-serialization-lib-nodejs';
 import { type NetworkConfig, ACTIVE_NETWORK } from './networks.js';
 import { walletManager, type WalletContext } from './wallet-manager.js';
+import { reportTrace } from './jobs.js';
 
 // @ts-expect-error: Needed for GraphQL subscriptions
 globalThis.WebSocket = WebSocket;
@@ -2082,7 +2083,10 @@ async function createProviderBridge(ctx: WalletContext, dustCtx?: WalletContext,
 function tracer(name: string) {
   const id = Math.random().toString(36).slice(2, 7);
   const t0 = Date.now();
-  return (step: string) => console.log(`[trace ${name} ${id}] +${((Date.now() - t0) / 1000).toFixed(1)}s ${step}`);
+  return (step: string) => {
+    console.log(`[trace ${name} ${id}] +${((Date.now() - t0) / 1000).toFixed(1)}s ${step}`);
+    reportTrace(name, step);
+  };
 }
 
 // Helper: resolve optional dustSeed to a WalletContext

@@ -48,6 +48,7 @@ import { walletManager, addressWatcher } from './wallet-manager.js';
 import { warmDustForkStart } from './dust-fork-start.js';
 import { installConsoleCapture, requestLogMiddleware, sendError } from './request-log.js';
 import { accessLogMiddleware, ACCESS_LOG_ENABLED } from './access-log.js';
+import { createJob, getJob, runInJob, finishJob, jobView, jobStats } from './jobs.js';
 
 // Ledger-8 era replay tools (dust/shielded bootstrap, MySQL fast-sync) are
 // obsolete since the ledger-9 fork: wallet-sdk 2.x starts dust at the fork and
@@ -433,6 +434,21 @@ swaggerSpec.paths = {
       responses: { 200: { description: 'Watched list' } },
     },
   },
+  '/api/jobs/{id}': {
+    get: {
+      tags: ['NFT'], summary: 'Progress of a mint / create-collection call',
+      description: 'Every POST /api/nft/mint and /api/nft/create-collection is a job (id in the X-Job-Id response header, or chosen by the caller via body.jobId, 8-64 chars [A-Za-z0-9_-]). With body.async=true (or ?async=1) the POST answers 202 {jobId,statusUrl} at once and the result appears here. state: running|done|failed; step: queued, preparing, deploying, proving, balancing, submitting, confirming, done, failed. Jobs are kept in memory for 2 h after they finish.',
+      parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'string' } }],
+      responses: { 200: { description: 'Job status' }, 404: { description: 'Unknown job' } },
+    },
+  },
+  '/api/status': {
+    get: {
+      tags: ['Health'], summary: 'Service status for status displays',
+      description: 'Proof server reachability/latency/version, wallet sync summary, running jobs and recent mint durations. status = ok | degraded.',
+      responses: { 200: { description: 'Status' } },
+    },
+  },
   '/api/nft/create-collection': {
     post: {
       tags: ['NFT'], summary: 'Create new NFT collection',
@@ -786,10 +802,92 @@ function validateSeed(seed: string, fieldName = 'seed'): string | null {
   return null;
 }
 
+
+// ---- Progress tracking (see jobs.ts) ---------------------------------------
+// Wraps a write handler. Every call becomes a job; GET /api/jobs/<id> shows its step.
+//  - body.jobId (optional, 8-64 [A-Za-z0-9_-]): caller-chosen id, so a UI can poll
+//    while another component waits for the normal synchronous response.
+//  - body.async === true or ?async=1: answer 202 { jobId, statusUrl } immediately;
+//    the result is then in GET /api/jobs/<id>.
+// Without either, the call behaves exactly as before (plus an X-Job-Id header).
+function tracked(type: string, core: (req: express.Request, res: any) => Promise<any>) {
+  return async (req: express.Request, res: express.Response) => {
+    const wantAsync = req.body?.async === true || req.query.async === '1' || req.query.async === 'true';
+    const reqId = req.body?.jobId;
+    const existing = typeof reqId === 'string' ? getJob(reqId) : undefined;
+    if (existing && existing.state === 'running') {
+      if (wantAsync) return res.status(202).json({ jobId: existing.id, statusUrl: `/api/jobs/${existing.id}`, state: existing.state });
+      res.setHeader('X-Job-Id', existing.id);
+      return core(req, res);   // the dedupe in the handler joins the running call
+    }
+    const job = createJob(type, reqId);
+    if ('error' in job) return res.status(400).json({ error: job.error });
+    const outcome = new Promise<{ status: number; body: any }>((resolve) => {
+      const cap: any = {
+        code: 200,
+        status(c: number) { this.code = c; return this; },
+        json(b: any) { resolve({ status: this.code, body: b }); return this; },
+        setHeader() { return this; },
+      };
+      runInJob(job, () => core(req, cap)).catch((err) => resolve({ status: 500, body: { error: err?.message ?? String(err) } }));
+    }).then((r) => { finishJob(job, r.status, r.body); return r; });
+    if (wantAsync) {
+      outcome.catch(() => {});
+      return res.status(202).json({ jobId: job.id, statusUrl: `/api/jobs/${job.id}`, state: job.state });
+    }
+    res.setHeader('X-Job-Id', job.id);
+    const r = await outcome;
+    res.status(r.status).json(r.body);
+  };
+}
+
+app.get('/api/jobs/:id', (req, res) => {
+  const job = getJob(req.params.id);
+  if (!job) return res.status(404).json({ error: 'unknown job (jobs are kept 2 h after they finish, in memory of this server only)' });
+  res.json(jobView(job));
+});
+
+// Overall health for a status display. Never contains keys or URLs.
+app.get('/api/status', async (_req, res) => {
+  const t0 = Date.now();
+  let proofServer: any;
+  try {
+    const r = await fetch(`${ACTIVE_NETWORK.proofServer}/health`, { signal: AbortSignal.timeout(5000) });
+    proofServer = { ok: r.ok, latencyMs: Date.now() - t0 };
+    try {
+      const v = await fetch(`${ACTIVE_NETWORK.proofServer}/version`, { signal: AbortSignal.timeout(3000) });
+      if (v.ok) proofServer.version = (await v.text()).trim().slice(0, 32);
+    } catch {}
+  } catch (e: any) {
+    proofServer = { ok: false, latencyMs: Date.now() - t0, error: String(e?.name === 'TimeoutError' ? 'timeout' : e?.message || e).slice(0, 120) };
+  }
+  let wallets: any;
+  try {
+    const list = walletManager.list();
+    const active = list.filter((w: any) => w.status === 'active');
+    const notSynced = active.filter((w: any) => (w.syncProgress?.percent ?? 0) < 100);   // percent, not the SDK's isSynced flag (lags after a restore)
+    wallets = {
+      total: list.length, active: active.length, synced: active.length - notSynced.length,
+      minSyncPercent: active.length ? Math.min(...active.map((w: any) => w.syncProgress?.percent ?? 0)) : null,
+      notSynced: notSynced.map((w: any) => ({ label: w.label, percent: w.syncProgress?.percent ?? 0 })),
+    };
+  } catch (e: any) { wallets = { error: String(e?.message || e).slice(0, 120) }; }
+  const ok = proofServer.ok && !wallets.error && wallets.synced === wallets.active;
+  res.json({
+    status: ok ? 'ok' : 'degraded',
+    network: ACTIVE_NETWORK.networkId,
+    time: new Date().toISOString(),
+    uptimeSec: Math.round(process.uptime()),
+    proofServer,
+    wallets,
+    jobs: jobStats(),
+  });
+});
+
 const COLLECTION_DONE_FILE = path.resolve(process.cwd(), `collections-done.${ACTIVE_NETWORK.networkId}.json`);
 const COLLECTION_DEDUPE_MS = 30 * 60_000;
 const collectionDedupe = new Map<string, Promise<any>>();
-app.post('/api/nft/create-collection', async (req, res) => {
+app.post('/api/nft/create-collection', tracked('create-collection', async (req, res: any) => {
   try {
     const { seed, collection, symbol, transferable, image, mediaType, dustSeed } = req.body;
     const seedErr = validateSeed(seed, 'seed');
@@ -832,11 +930,11 @@ app.post('/api/nft/create-collection', async (req, res) => {
     const status = err.message?.includes('exceeds maximum length') ? 400 : 500;
     sendError(res, err, status);
   }
-});
+}));
 
 const MINT_DONE_FILE = path.resolve(process.cwd(), `mints-done.${ACTIVE_NETWORK.networkId}.json`);
 const mintDedupe = new Map<string, { promise: Promise<any>; at: number }>();
-app.post('/api/nft/mint', async (req, res) => {
+app.post('/api/nft/mint', tracked('mint', async (req, res: any) => {
   try {
     const {
       ownerSeed, contractAddress, name, image, mediaType,
@@ -892,7 +990,7 @@ app.post('/api/nft/mint', async (req, res) => {
     const status = err.message?.includes('exceeds maximum length') || err.message?.includes('required') ? 400 : 500;
     sendError(res, err, status);
   }
-});
+}));
 
 // Build an UNSEALED mint tx — proven + signed by owner, NOT balanced.
 // Use case: dApp passes the hex to a wallet's balanceUnsealedTransaction()
