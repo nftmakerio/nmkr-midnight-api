@@ -786,6 +786,9 @@ function validateSeed(seed: string, fieldName = 'seed'): string | null {
   return null;
 }
 
+const COLLECTION_DONE_FILE = path.resolve(process.cwd(), `collections-done.${ACTIVE_NETWORK.networkId}.json`);
+const COLLECTION_DEDUPE_MS = 30 * 60_000;
+const collectionDedupe = new Map<string, Promise<any>>();
 app.post('/api/nft/create-collection', async (req, res) => {
   try {
     const { seed, collection, symbol, transferable, image, mediaType, dustSeed } = req.body;
@@ -795,7 +798,36 @@ app.post('/api/nft/create-collection', async (req, res) => {
     if (!collection || !symbol) return res.status(400).json({ error: 'collection and symbol are required' });
     // Deploys an MTS collection contract (native-token NFTs rendered by 1AM-style wallets).
     // Returns contractAddress + ownerSeed for subsequent /api/nft/mint calls.
-    res.json(await deployMtsCollection({ seed, collection, symbol, dustSeed }));
+    // Idempotency: a caller that retries (timeout, parallel resend) must not deploy
+    // a second collection. Identical requests (same owner seed + name + symbol +
+    // image) join the deploy in flight; within 30 min after a successful deploy
+    // they get the same result back (deduplicated: true) instead of a new contract.
+    const key = createHash('sha256').update(JSON.stringify([seed, collection, symbol, image || null])).digest('hex');
+    let done: any = {};
+    try { done = JSON.parse(fs.readFileSync(COLLECTION_DONE_FILE, 'utf-8')); } catch {}
+    const prevDone = done[key];
+    if (prevDone && Date.now() - Date.parse(prevDone.at) < COLLECTION_DEDUPE_MS) {
+      console.log(`[CollectionDedupe] ${collection}: already deployed at ${prevDone.at} -> returning ${prevDone.result?.contractAddress}`);
+      return res.json({ ...prevDone.result, ownerSeed: seed, deduplicated: true });
+    }
+    const prev = collectionDedupe.get(key);
+    if (prev) {
+      console.log(`[CollectionDedupe] identical create-collection (${collection}) -> joining previous call`);
+      return res.json({ ...(await prev), deduplicated: true });
+    }
+    const promise = deployMtsCollection({ seed, collection, symbol, dustSeed });
+    collectionDedupe.set(key, promise);
+    promise.finally(() => collectionDedupe.delete(key)).catch(() => {});
+    const result = await promise;
+    try {
+      done = {};
+      try { done = JSON.parse(fs.readFileSync(COLLECTION_DONE_FILE, 'utf-8')); } catch {}
+      for (const k of Object.keys(done)) if (Date.now() - Date.parse(done[k].at) > COLLECTION_DEDUPE_MS) delete done[k];
+      const { ownerSeed: _omit, ...stored } = result;   // never persist seeds
+      done[key] = { at: new Date().toISOString(), result: stored };
+      fs.writeFileSync(COLLECTION_DONE_FILE, JSON.stringify(done, null, 1));
+    } catch {}
+    res.json(result);
   } catch (err: any) {
     const status = err.message?.includes('exceeds maximum length') ? 400 : 500;
     sendError(res, err, status);
